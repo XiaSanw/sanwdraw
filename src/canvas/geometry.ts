@@ -1,0 +1,160 @@
+import type {
+  CanvasElement,
+  ComponentElement,
+  InterfacePort,
+  Network,
+  Point,
+  SanwDocument,
+} from "../model/types";
+import { parsePortRef } from "../model/types";
+import {
+  DEFAULT_PORT_GAP,
+  getDocumentPortGap,
+  PORT_BOX_HEIGHT,
+  PORT_BOX_WIDTH,
+} from "../model/settings";
+
+export const getComponent = (document: SanwDocument, componentId: string) =>
+  document.elements.find(
+    (element): element is ComponentElement =>
+      element.kind === "component" && element.id === componentId,
+  );
+
+export const getPort = (document: SanwDocument, ref: string) => {
+  const { componentId, portId } = parsePortRef(ref);
+  const component = getComponent(document, componentId);
+  const port = component?.ports.find((item) => item.id === portId);
+  return component && port ? { component, port } : undefined;
+};
+
+export const getPortPoint = (
+  component: ComponentElement,
+  port: InterfacePort,
+  portGap = DEFAULT_PORT_GAP,
+): Point => {
+  if (port.edge === "left") {
+    return {
+      x: component.x - portGap - PORT_BOX_WIDTH,
+      y: component.y + component.height * port.offset,
+    };
+  }
+  if (port.edge === "right") {
+    return {
+      x: component.x + component.width + portGap + PORT_BOX_WIDTH,
+      y: component.y + component.height * port.offset,
+    };
+  }
+  if (port.edge === "top") {
+    return {
+      x: component.x + component.width * port.offset,
+      y: component.y - portGap - PORT_BOX_HEIGHT,
+    };
+  }
+  return {
+    x: component.x + component.width * port.offset,
+    y: component.y + component.height + portGap + PORT_BOX_HEIGHT,
+  };
+};
+
+export const getRefPoint = (document: SanwDocument, ref: string) => {
+  const result = getPort(document, ref);
+  return result
+    ? getPortPoint(result.component, result.port, getDocumentPortGap(document))
+    : undefined;
+};
+
+export const getNetworkPoints = (document: SanwDocument, network: Network) => {
+  const portGap = getDocumentPortGap(document);
+  return network.memberIds
+    .map((ref) => {
+      const result = getPort(document, ref);
+      if (!result) return undefined;
+      return {
+        ref,
+        point: getPortPoint(result.component, result.port, portGap),
+        edge: result.port.edge,
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item));
+};
+
+export const networkHub = (document: SanwDocument, network: Network): Point => {
+  if (network.junction) return network.junction;
+  const points = getNetworkPoints(document, network);
+  if (!points.length) return { x: 0, y: 0 };
+  return {
+    x: points.reduce((sum, item) => sum + item.point.x, 0) / points.length,
+    y: points.reduce((sum, item) => sum + item.point.y, 0) / points.length,
+  };
+};
+
+export const defaultRoutePointsToHub = (
+  point: Point,
+  edge: InterfacePort["edge"],
+  hub: Point,
+): Point[] => {
+  const stub = 22;
+  if (edge === "left" || edge === "right") {
+    const stubX = point.x + (edge === "left" ? -stub : stub);
+    return [
+      { x: stubX, y: point.y },
+      { x: hub.x, y: point.y },
+    ];
+  }
+  const stubY = point.y + (edge === "top" ? -stub : stub);
+  return [
+    { x: point.x, y: stubY },
+    { x: point.x, y: hub.y },
+  ];
+};
+
+export const routeToHub = (
+  point: Point,
+  edge: InterfacePort["edge"],
+  hub: Point,
+  routePoints?: Point[],
+) => {
+  const bends = routePoints ?? defaultRoutePointsToHub(point, edge, hub);
+  const points = [point, ...bends, hub];
+  return points
+    .map((item, index) => `${index === 0 ? "M" : "L"} ${item.x} ${item.y}`)
+    .join(" ");
+};
+
+export const nearestSegmentIndex = (points: Point[], target: Point) => {
+  let closestIndex = 0;
+  let closestDistance = Number.POSITIVE_INFINITY;
+
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const projection = lengthSquared === 0
+      ? 0
+      : Math.max(0, Math.min(1, ((target.x - start.x) * dx + (target.y - start.y) * dy) / lengthSquared));
+    const projected = { x: start.x + dx * projection, y: start.y + dy * projection };
+    const distance = (target.x - projected.x) ** 2 + (target.y - projected.y) ** 2;
+    if (distance < closestDistance) {
+      closestDistance = distance;
+      closestIndex = index;
+    }
+  }
+
+  return closestIndex;
+};
+
+export const documentBounds = (elements: CanvasElement[], expansion = 0) => {
+  if (!elements.length) return { x: 0, y: 0, width: 1000, height: 700 };
+  const minX = Math.min(...elements.map((element) => element.x));
+  const minY = Math.min(...elements.map((element) => element.y));
+  const maxX = Math.max(...elements.map((element) => element.x + element.width));
+  const maxY = Math.max(...elements.map((element) => element.y + element.height));
+  return {
+    x: minX - expansion,
+    y: minY - expansion,
+    width: maxX - minX + expansion * 2,
+    height: maxY - minY + expansion * 2,
+  };
+};
