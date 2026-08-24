@@ -47,6 +47,7 @@ import type {
   Viewport,
 } from "./model/types";
 import { createId, portRef } from "./model/types";
+import { BrandMark } from "./ui/BrandMark";
 import { Icon } from "./ui/Icon";
 
 type Tool = "select" | "wire" | "text" | "image" | "hand";
@@ -1185,7 +1186,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="topbar">
-        <div className="brand-mark">S</div>
+        <div className="brand-mark"><BrandMark size={34} /></div>
         <div className="brand-copy">
           <strong>SanwDraw</strong>
           <span>Hardware architecture canvas</span>
@@ -1619,10 +1620,16 @@ function App() {
           </div>
 
           <div className="canvas-controls">
-            <button onClick={() => setZoom(viewport.zoom - 0.1)}>−</button>
+            <button onClick={() => setZoom(viewport.zoom - 0.1)} title="缩小" aria-label="缩小">
+              <Icon name="minus" size={15} />
+            </button>
             <span>{Math.round(viewport.zoom * 100)}%</span>
-            <button onClick={() => setZoom(viewport.zoom + 0.1)}>＋</button>
-            <button onClick={fitView} title="适应全部内容"><Icon name="fit" size={16} /></button>
+            <button onClick={() => setZoom(viewport.zoom + 0.1)} title="放大" aria-label="放大">
+              <Icon name="plus" size={15} />
+            </button>
+            <button onClick={fitView} title="适应全部内容" aria-label="适应全部内容">
+              <Icon name="fit" size={16} />
+            </button>
           </div>
           <div className="canvas-status">
             <span className={`status-tool ${wireDraft ? "connecting" : ""}`}>

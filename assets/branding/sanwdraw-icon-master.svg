@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fefdf8"/>
+      <stop offset="1" stop-color="#f1eddf"/>
+    </linearGradient>
+    <linearGradient id="ring" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5c8ae0"/>
+      <stop offset="1" stop-color="#3a6cd4"/>
+    </linearGradient>
+    <linearGradient id="chip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#f6f2e6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 米白底板 -->
+  <rect x="48" y="48" width="928" height="928" rx="212" fill="url(#tile)"/>
+  <rect x="49.5" y="49.5" width="925" height="925" rx="210.5" fill="none" stroke="#e3ddc9" stroke-width="3"/>
+
+  <!-- 四向接口母线环 -->
+  <rect x="256" y="256" width="512" height="512" rx="118" fill="none" stroke="url(#ring)" stroke-width="42"/>
+
+  <!-- 内部走线：电源/信号双总线 -->
+  <path d="M 344 392 H 444 Q 496 392 496 444 V 572" fill="none" stroke="#2f5cc2" stroke-width="38" stroke-linecap="round"/>
+  <circle cx="496" cy="572" r="33" fill="#2f5cc2"/>
+  <path d="M 680 632 H 612 Q 560 632 560 580 V 452" fill="none" stroke="#9dbdf1" stroke-width="38" stroke-linecap="round"/>
+  <circle cx="560" cy="452" r="33" fill="#9dbdf1"/>
+
+  <!-- 四向接口框 -->
+  <g fill="url(#chip)" stroke="#3a6cd4" stroke-width="26">
+    <rect x="434" y="210" width="156" height="92" rx="28"/>
+    <rect x="434" y="722" width="156" height="92" rx="28"/>
+    <rect x="210" y="466" width="92" height="156" rx="28"/>
+    <rect x="722" y="466" width="92" height="156" rx="28"/>
+  </g>
+</svg>
