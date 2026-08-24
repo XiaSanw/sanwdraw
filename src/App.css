@@ -874,6 +874,14 @@ button {
   pointer-events: none;
 }
 
+.wire-snap-guide {
+  stroke: rgba(58, 108, 212, 0.58);
+  stroke-width: 1;
+  stroke-dasharray: 5 6;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
 .network,
 .network path,
 .network circle,
@@ -1273,6 +1281,15 @@ button {
 .status-tool.connecting {
   color: var(--blue-deep);
   background: var(--blue-soft);
+}
+
+.status-snap {
+  padding: 3px 7px;
+  border: 1px solid rgba(58, 108, 212, 0.2);
+  border-radius: 5px;
+  background: var(--blue-softer);
+  color: var(--blue-deep);
+  font-weight: 700;
 }
 
 .status-counts {

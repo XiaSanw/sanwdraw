@@ -20,9 +20,10 @@ import {
   getNetworkPoints,
   getPort,
   getPortPoint,
-  nearestSegmentIndex,
+  nearestPointOnPath,
   networkHub,
   routeToHub,
+  snapPointToOrthogonalAnchors,
 } from "./canvas/geometry";
 import { exportSanwdraw, importSanwdraw } from "./model/archive";
 import { disconnectNetworkBranch } from "./model/networks";
@@ -65,6 +66,7 @@ type ElementDrag = {
 };
 type PanDrag = { pointerId: number; clientOrigin: Point; viewportOrigin: Point };
 type WireDraft = { sourceRef: string; cursor: Point };
+type SnapGuides = { x?: number; y?: number };
 type NetworkPointDrag =
   | {
       kind: "route";
@@ -93,6 +95,7 @@ const MAX_ZOOM = 2.2;
 const DEFAULT_LIBRARY_WIDTH = 238;
 const MIN_LIBRARY_WIDTH = 180;
 const MAX_LIBRARY_WIDTH = 420;
+const ORTHOGONAL_SNAP_SCREEN_DISTANCE = 12;
 const LIBRARY_WIDTH_KEY = "sanwdraw.libraryWidth";
 const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
 
@@ -230,6 +233,7 @@ function App() {
   const [panDrag, setPanDrag] = useState<PanDrag | null>(null);
   const [networkPointDrag, setNetworkPointDrag] = useState<NetworkPointDrag | null>(null);
   const [wireDraft, setWireDraft] = useState<WireDraft | null>(null);
+  const [snapGuides, setSnapGuides] = useState<SnapGuides | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryWidth, setLibraryWidth] = useState(readStoredLibraryWidth);
   const [libraryCollapsed, setLibraryCollapsed] = useState(readStoredLibraryCollapsed);
@@ -276,6 +280,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(LIBRARY_COLLAPSED_KEY, String(libraryCollapsed));
   }, [libraryCollapsed]);
+
+  useEffect(() => {
+    if (!wireDraft && !networkPointDrag) setSnapGuides(null);
+  }, [networkPointDrag, wireDraft]);
 
   useEffect(() => {
     if (!libraryResize) return;
@@ -715,7 +723,7 @@ function App() {
     setTool("wire");
     setWireDraft({ sourceRef: ref, cursor: getPortPoint(component, port, portGap) });
     setSelection(null);
-    setNotice("点击另一个接口，或点击已有连线吸附到共享网络");
+    setNotice("点击另一个接口或已有连线；靠近水平/垂直方向会吸附，按住 Alt 可临时关闭");
   };
 
   const startElementDrag = (event: ReactPointerEvent, element: CanvasElement) => {
@@ -764,7 +772,7 @@ function App() {
       startDocument: document,
     });
     setSelection({ kind: "branch", networkId: network.id, memberRef });
-    setNotice("拖动拐点调整走线；双击拐点可删除");
+    setNotice("拖动拐点调整走线；靠近水平或垂直方向会自动吸附，按住 Alt 可自由拖动");
   };
 
   const startJunctionDrag = (
@@ -781,7 +789,7 @@ function App() {
       startDocument: document,
     });
     setSelection({ kind: "network", id: network.id });
-    setNotice("拖动汇合点调整共享网络位置");
+    setNotice("拖动汇合点调整共享网络位置；靠近水平或垂直方向会自动吸附");
   };
 
   const addRoutePoint = (
@@ -794,11 +802,11 @@ function App() {
   ) => {
     if (wireDraft || tool !== "select") return;
     event.stopPropagation();
-    const point = clientToWorld(event.clientX, event.clientY);
+    const pointer = clientToWorld(event.clientX, event.clientY);
     const routePoints = (network.routes?.[memberRef] ?? defaultRoutePointsToHub(start, edge, hub))
       .map((item) => ({ ...item }));
-    const insertAt = nearestSegmentIndex([start, ...routePoints, hub], point);
-    routePoints.splice(insertAt, 0, point);
+    const projection = nearestPointOnPath([start, ...routePoints, hub], pointer);
+    routePoints.splice(projection.segmentIndex, 0, projection.point);
     commit((current) => ({
       ...current,
       networks: current.networks.map((item) =>
@@ -898,6 +906,46 @@ function App() {
     }
     const world = clientToWorld(event.clientX, event.clientY);
     if (networkPointDrag?.pointerId === event.pointerId) {
+      let dragPoint = world;
+      let nextGuides: SnapGuides | null = null;
+      if (!event.altKey) {
+        const network = document.networks.find((item) => item.id === networkPointDrag.networkId);
+        if (network) {
+          const endpoints = getNetworkPoints(document, network);
+          let anchors: Point[] = [];
+          if (networkPointDrag.kind === "route") {
+            const endpoint = endpoints.find((item) => item.ref === networkPointDrag.memberRef);
+            const hub = networkHub(document, network);
+            if (endpoint) {
+              const routePoints = network.routes?.[networkPointDrag.memberRef]
+                ?? defaultRoutePointsToHub(endpoint.point, endpoint.edge, hub);
+              const previous = networkPointDrag.pointIndex === 0
+                ? endpoint.point
+                : routePoints[networkPointDrag.pointIndex - 1];
+              const next = networkPointDrag.pointIndex === routePoints.length - 1
+                ? hub
+                : routePoints[networkPointDrag.pointIndex + 1];
+              anchors = [previous, next].filter((point): point is Point => Boolean(point));
+            }
+          } else {
+            anchors = endpoints.flatMap((endpoint) => {
+              const routePoints = network.routes?.[endpoint.ref];
+              const routeTail = routePoints?.[routePoints.length - 1];
+              return routeTail ? [endpoint.point, routeTail] : [endpoint.point];
+            });
+          }
+          const snapped = snapPointToOrthogonalAnchors(
+            world,
+            anchors,
+            ORTHOGONAL_SNAP_SCREEN_DISTANCE / viewport.zoom,
+          );
+          dragPoint = snapped.point;
+          nextGuides = snapped.snappedX !== undefined || snapped.snappedY !== undefined
+            ? { x: snapped.snappedX, y: snapped.snappedY }
+            : null;
+        }
+      }
+      setSnapGuides(nextGuides);
       setHistory((current) => ({
         ...current,
         present: {
@@ -905,7 +953,7 @@ function App() {
           networks: current.present.networks.map((network) => {
             if (network.id !== networkPointDrag.networkId) return network;
             if (networkPointDrag.kind === "junction") {
-              return { ...network, junction: world };
+              return { ...network, junction: dragPoint };
             }
             const routePoints = network.routes?.[networkPointDrag.memberRef] ?? [];
             return {
@@ -913,7 +961,7 @@ function App() {
               routes: {
                 ...network.routes,
                 [networkPointDrag.memberRef]: routePoints.map((point, index) =>
-                  index === networkPointDrag.pointIndex ? world : point,
+                  index === networkPointDrag.pointIndex ? dragPoint : point,
                 ),
               },
             };
@@ -941,7 +989,27 @@ function App() {
         },
       }));
     }
-    if (wireDraft) setWireDraft({ ...wireDraft, cursor: world });
+    if (wireDraft) {
+      let cursor = world;
+      let nextGuides: SnapGuides | null = null;
+      const source = getPort(document, wireDraft.sourceRef);
+      if (source && !event.altKey) {
+        const sourcePoint = getPortPoint(source.component, source.port, portGap);
+        const snapped = snapPointToOrthogonalAnchors(
+          world,
+          [sourcePoint],
+          ORTHOGONAL_SNAP_SCREEN_DISTANCE / viewport.zoom,
+        );
+        cursor = snapped.point;
+        nextGuides = snapped.snappedX !== undefined || snapped.snappedY !== undefined
+          ? { x: snapped.snappedX, y: snapped.snappedY }
+          : null;
+      }
+      setSnapGuides(nextGuides);
+      setWireDraft({ ...wireDraft, cursor });
+    } else if (snapGuides) {
+      setSnapGuides(null);
+    }
   };
 
   const handleCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -952,6 +1020,7 @@ function App() {
         future: [],
       }));
       setNetworkPointDrag(null);
+      setSnapGuides(null);
     }
     if (elementDrag?.pointerId === event.pointerId) {
       setHistory((current) => ({
@@ -1411,6 +1480,24 @@ function App() {
             }}
           >
             <svg className="wire-layer" width={WORLD_WIDTH} height={WORLD_HEIGHT}>
+              {snapGuides?.x !== undefined && (
+                <line
+                  className="wire-snap-guide"
+                  x1={snapGuides.x}
+                  y1={0}
+                  x2={snapGuides.x}
+                  y2={WORLD_HEIGHT}
+                />
+              )}
+              {snapGuides?.y !== undefined && (
+                <line
+                  className="wire-snap-guide"
+                  x1={0}
+                  y1={snapGuides.y}
+                  x2={WORLD_WIDTH}
+                  y2={snapGuides.y}
+                />
+              )}
               {document.networks.map((network) => {
                 const points = getNetworkPoints(document, network);
                 const hub = networkHub(document, network);
@@ -1635,6 +1722,7 @@ function App() {
             <span className={`status-tool ${wireDraft ? "connecting" : ""}`}>
               {wireDraft ? "连线中" : toolItems.find((item) => item.id === tool)?.label}
             </span>
+            {snapGuides && <span className="status-snap">平行 / 90° 吸附</span>}
             <span>{notice}</span>
             <span className="status-counts">
               {document.elements.filter((element) => element.kind === "component").length} 个组件 · {document.networks.length} 个网络
@@ -1802,7 +1890,7 @@ function App() {
               )}
               <div className="property-section route-editor-help">
                 <div className="property-section-title"><strong>支路走线</strong><span>独立操作</span></div>
-                <p>拖动蓝色圆点调整这条支路。双击线段新增拐点，双击圆点删除拐点。</p>
+                <p>拖动蓝色圆点调整支路；靠近水平或垂直方向会吸附为平行/90°，按住 Alt 可自由拖动。双击线段新增拐点，双击圆点删除拐点。</p>
                 <div className="branch-actions">
                   <button
                     className="button secondary routing-reset"

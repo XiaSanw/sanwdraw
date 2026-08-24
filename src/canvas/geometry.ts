@@ -121,8 +121,53 @@ export const routeToHub = (
     .join(" ");
 };
 
-export const nearestSegmentIndex = (points: Point[], target: Point) => {
+export type OrthogonalSnapResult = {
+  point: Point;
+  snappedX?: number;
+  snappedY?: number;
+};
+
+/**
+ * Snap a moving point onto the horizontal or vertical axes of nearby anchors.
+ * This keeps adjacent harness segments parallel or at 90° while still allowing
+ * free-form routing whenever the pointer is outside the snap distance.
+ */
+export const snapPointToOrthogonalAnchors = (
+  point: Point,
+  anchors: Point[],
+  threshold: number,
+): OrthogonalSnapResult => {
+  let snappedX: number | undefined;
+  let snappedY: number | undefined;
+  let closestX = Math.max(0, threshold);
+  let closestY = Math.max(0, threshold);
+
+  anchors.forEach((anchor) => {
+    const distanceX = Math.abs(point.x - anchor.x);
+    const distanceY = Math.abs(point.y - anchor.y);
+    if (distanceX <= closestX) {
+      closestX = distanceX;
+      snappedX = anchor.x;
+    }
+    if (distanceY <= closestY) {
+      closestY = distanceY;
+      snappedY = anchor.y;
+    }
+  });
+
+  return {
+    point: {
+      x: snappedX ?? point.x,
+      y: snappedY ?? point.y,
+    },
+    snappedX,
+    snappedY,
+  };
+};
+
+export const nearestPointOnPath = (points: Point[], target: Point) => {
   let closestIndex = 0;
+  let closestPoint = target;
   let closestDistance = Number.POSITIVE_INFINITY;
 
   for (let index = 0; index < points.length - 1; index += 1) {
@@ -139,10 +184,11 @@ export const nearestSegmentIndex = (points: Point[], target: Point) => {
     if (distance < closestDistance) {
       closestDistance = distance;
       closestIndex = index;
+      closestPoint = projected;
     }
   }
 
-  return closestIndex;
+  return { segmentIndex: closestIndex, point: closestPoint };
 };
 
 export const documentBounds = (elements: CanvasElement[], expansion = 0) => {
