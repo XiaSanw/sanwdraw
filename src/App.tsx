@@ -1764,10 +1764,15 @@ function App() {
                 color={selectedElement.accent}
                 onChange={(color) => updateElement(selectedElement.id, { accent: color })}
               />
-              <div className="field read-only">
-                <span>内部资源</span>
-                <div className="property-tags">{selectedElement.resources.map((resource) => <em key={resource}>{resource}</em>)}</div>
-              </div>
+              <label className="field">
+                <span>描述</span>
+                <textarea
+                  rows={3}
+                  value={selectedElement.description ?? ""}
+                  placeholder="说明这个器件在系统中的用途"
+                  onChange={(event) => updateElement(selectedElement.id, { description: event.target.value })}
+                />
+              </label>
               <div className="property-section">
                 <div className="property-section-title"><strong>端口</strong><span>{selectedElement.ports.length}</span></div>
                 <button className="button secondary add-port-button" onClick={() => addComponentPort(selectedElement)}>

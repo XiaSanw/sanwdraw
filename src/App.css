@@ -1426,22 +1426,6 @@ button {
   justify-content: space-between;
 }
 
-.property-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-}
-
-.property-tags em {
-  padding: 3px 5px;
-  border-radius: 4px;
-  background: var(--cream-deep);
-  color: #5f6a7d;
-  font-size: 8px;
-  font-style: normal;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
 .property-section {
   margin-top: 18px;
   padding-top: 14px;
