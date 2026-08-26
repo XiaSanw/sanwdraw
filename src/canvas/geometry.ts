@@ -4,6 +4,7 @@ import type {
   InterfacePort,
   Network,
   Point,
+  PortEdge,
   SanwDocument,
 } from "../model/types";
 import { parsePortRef } from "../model/types";
@@ -61,6 +62,43 @@ export const getRefPoint = (document: SanwDocument, ref: string) => {
   return result
     ? getPortPoint(result.component, result.port, getDocumentPortGap(document))
     : undefined;
+};
+
+export const nearestComponentEdgePlacement = (
+  component: ComponentElement,
+  point: Point,
+): { edge: PortEdge; offset: number } => {
+  const clampOffset = (value: number) => Math.max(0.08, Math.min(0.92, value));
+  const horizontalOffset = clampOffset((point.x - component.x) / component.width);
+  const verticalOffset = clampOffset((point.y - component.y) / component.height);
+  const projectedX = component.x + component.width * horizontalOffset;
+  const projectedY = component.y + component.height * verticalOffset;
+  const candidates: Array<{ edge: PortEdge; offset: number; distance: number }> = [
+    {
+      edge: "left",
+      offset: verticalOffset,
+      distance: (point.x - component.x) ** 2 + (point.y - projectedY) ** 2,
+    },
+    {
+      edge: "right",
+      offset: verticalOffset,
+      distance: (point.x - component.x - component.width) ** 2 + (point.y - projectedY) ** 2,
+    },
+    {
+      edge: "top",
+      offset: horizontalOffset,
+      distance: (point.x - projectedX) ** 2 + (point.y - component.y) ** 2,
+    },
+    {
+      edge: "bottom",
+      offset: horizontalOffset,
+      distance: (point.x - projectedX) ** 2 + (point.y - component.y - component.height) ** 2,
+    },
+  ];
+
+  return candidates.reduce((closest, candidate) =>
+    candidate.distance < closest.distance ? candidate : closest,
+  );
 };
 
 export const getNetworkPoints = (document: SanwDocument, network: Network) => {

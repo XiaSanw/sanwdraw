@@ -1021,6 +1021,11 @@ button {
   box-shadow: 0 0 0 3px rgba(58, 108, 212, 0.13);
 }
 
+.component-node.port-repositioning {
+  border-color: var(--sky);
+  box-shadow: 0 0 0 4px rgba(58, 108, 212, 0.1), var(--shadow-lift);
+}
+
 .node-accent {
   position: absolute;
   top: 16px;
@@ -1100,6 +1105,7 @@ button {
   font-weight: 750;
   white-space: nowrap;
   cursor: crosshair;
+  touch-action: none;
   box-shadow: 0 3px 8px rgba(80, 72, 44, 0.1);
   transform: translate(var(--port-x), var(--port-y));
   transition: transform 0.14s var(--ease-out), box-shadow 0.14s ease;
@@ -1152,6 +1158,14 @@ button {
   z-index: 8;
   transform: translate(var(--port-x), var(--port-y)) scale(1.08);
   box-shadow: 0 0 0 4px rgba(58, 108, 212, 0.15), 0 4px 10px rgba(80, 72, 44, 0.14);
+}
+
+.port.repositioning {
+  z-index: 12;
+  cursor: grabbing;
+  transform: translate(var(--port-x), var(--port-y)) scale(1.12);
+  transition: none;
+  box-shadow: 0 0 0 5px rgba(58, 108, 212, 0.17), 0 7px 16px rgba(58, 68, 96, 0.2);
 }
 
 .port-dot {
@@ -1281,6 +1295,11 @@ button {
 .status-tool.connecting {
   color: var(--blue-deep);
   background: var(--blue-soft);
+}
+
+.status-tool.positioning {
+  color: #216f8e;
+  background: #e5f4f8;
 }
 
 .status-snap {

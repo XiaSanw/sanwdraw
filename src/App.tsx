@@ -8,7 +8,6 @@ import {
   type DragEvent,
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
-  type WheelEvent,
 } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
@@ -20,6 +19,7 @@ import {
   getNetworkPoints,
   getPort,
   getPortPoint,
+  nearestComponentEdgePlacement,
   nearestPointOnPath,
   networkHub,
   routeToHub,
@@ -27,6 +27,7 @@ import {
 } from "./canvas/geometry";
 import { exportSanwdraw, importSanwdraw } from "./model/archive";
 import { disconnectNetworkBranch } from "./model/networks";
+import { distributePortsOnEdges, movePortToEdge } from "./model/ports";
 import { createSampleDocument } from "./model/sampleDocument";
 import {
   clampPortGap,
@@ -67,6 +68,19 @@ type ElementDrag = {
 type PanDrag = { pointerId: number; clientOrigin: Point; viewportOrigin: Point };
 type WireDraft = { sourceRef: string; cursor: Point };
 type SnapGuides = { x?: number; y?: number };
+type PortReposition = { componentId: string; portId: string };
+type PortPress = {
+  pointerId: number;
+  componentId: string;
+  portId: string;
+  originEdge: PortEdge;
+  startClient: Point;
+  startDocument: SanwDocument;
+  timerId: number;
+  activated: boolean;
+  cancelled: boolean;
+  moved: boolean;
+};
 type NetworkPointDrag =
   | {
       kind: "route";
@@ -96,6 +110,8 @@ const DEFAULT_LIBRARY_WIDTH = 238;
 const MIN_LIBRARY_WIDTH = 180;
 const MAX_LIBRARY_WIDTH = 420;
 const ORTHOGONAL_SNAP_SCREEN_DISTANCE = 12;
+const PORT_LONG_PRESS_MS = 420;
+const PORT_PRESS_MOVE_TOLERANCE = 7;
 const LIBRARY_WIDTH_KEY = "sanwdraw.libraryWidth";
 const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
 
@@ -234,6 +250,7 @@ function App() {
   const [networkPointDrag, setNetworkPointDrag] = useState<NetworkPointDrag | null>(null);
   const [wireDraft, setWireDraft] = useState<WireDraft | null>(null);
   const [snapGuides, setSnapGuides] = useState<SnapGuides | null>(null);
+  const [portReposition, setPortReposition] = useState<PortReposition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [libraryWidth, setLibraryWidth] = useState(readStoredLibraryWidth);
   const [libraryCollapsed, setLibraryCollapsed] = useState(readStoredLibraryCollapsed);
@@ -242,6 +259,7 @@ function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const projectInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
+  const portPressRef = useRef<PortPress | null>(null);
   const initialFitDone = useRef(false);
 
   const selectedElement = useMemo(
@@ -327,6 +345,22 @@ function App() {
     });
   }, []);
 
+  const cancelPortInteraction = useCallback((restoreDocument = false) => {
+    const press = portPressRef.current;
+    if (!press) return;
+    window.clearTimeout(press.timerId);
+    portPressRef.current = null;
+    if (restoreDocument && press.activated && press.moved) {
+      setHistory((current) => ({ ...current, present: press.startDocument }));
+    }
+    setPortReposition(null);
+  }, []);
+
+  useEffect(() => () => {
+    const press = portPressRef.current;
+    if (press) window.clearTimeout(press.timerId);
+  }, []);
+
   const undo = useCallback(() => {
     setHistory((current) => {
       const previous = current.past[current.past.length - 1];
@@ -362,6 +396,51 @@ function App() {
     },
     [viewport],
   );
+
+  const handleNativeWheel = useCallback((event: globalThis.WheelEvent) => {
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    event.preventDefault();
+    const unit = event.deltaMode === 1
+      ? 16
+      : event.deltaMode === 2
+        ? bounds.height
+        : 1;
+
+    if (event.ctrlKey || event.metaKey) {
+      const local = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
+      const delta = Math.max(-60, Math.min(60, event.deltaY * unit));
+      setViewport((current) => {
+        const world = {
+          x: (local.x - current.x) / current.zoom,
+          y: (local.y - current.y) / current.zoom,
+        };
+        const zoom = Math.max(
+          MIN_ZOOM,
+          Math.min(MAX_ZOOM, current.zoom * Math.exp(-delta * 0.006)),
+        );
+        return {
+          zoom,
+          x: local.x - world.x * zoom,
+          y: local.y - world.y * zoom,
+        };
+      });
+      return;
+    }
+
+    setViewport((current) => ({
+      ...current,
+      x: current.x - event.deltaX * unit,
+      y: current.y - event.deltaY * unit,
+    }));
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.addEventListener("wheel", handleNativeWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", handleNativeWheel);
+  }, [handleNativeWheel]);
 
   const centerOfViewport = useCallback(() => {
     const bounds = canvasRef.current?.getBoundingClientRect();
@@ -515,6 +594,7 @@ function App() {
   const openProject = useCallback(async (file: File) => {
     try {
       const next = await importSanwdraw(file);
+      cancelPortInteraction();
       initialFitDone.current = false;
       setHistory({ past: [], present: next, future: [] });
       setSelection(null);
@@ -523,7 +603,7 @@ function App() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "工程文件打开失败");
     }
-  }, []);
+  }, [cancelPortInteraction]);
 
   const chooseProject = useCallback(async () => {
     if (!isTauri()) {
@@ -707,12 +787,30 @@ function App() {
     [commit, document.networks],
   );
 
+  const activatePortConnection = (componentId: string, portId: string) => {
+    const ref = portRef(componentId, portId);
+    if (wireDraft) {
+      connectPorts(wireDraft.sourceRef, ref);
+      return;
+    }
+    const endpoint = getPort(document, ref);
+    if (!endpoint) return;
+    setTool("wire");
+    setWireDraft({
+      sourceRef: ref,
+      cursor: getPortPoint(endpoint.component, endpoint.port, portGap),
+    });
+    setSelection(null);
+    setNotice("点击另一个接口或已有连线；靠近水平/垂直方向会吸附，按住 Alt 可临时关闭");
+  };
+
   const handlePortPointerDown = (
-    event: ReactPointerEvent,
+    event: ReactPointerEvent<HTMLButtonElement>,
     component: ComponentElement,
     portId: string,
   ) => {
     event.stopPropagation();
+    if (event.button !== 0) return;
     const ref = portRef(component.id, portId);
     if (wireDraft) {
       connectPorts(wireDraft.sourceRef, ref);
@@ -720,10 +818,31 @@ function App() {
     }
     const port = component.ports.find((item) => item.id === portId);
     if (!port) return;
-    setTool("wire");
-    setWireDraft({ sourceRef: ref, cursor: getPortPoint(component, port, portGap) });
-    setSelection(null);
-    setNotice("点击另一个接口或已有连线；靠近水平/垂直方向会吸附，按住 Alt 可临时关闭");
+
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const press: PortPress = {
+      pointerId: event.pointerId,
+      componentId: component.id,
+      portId,
+      originEdge: port.edge,
+      startClient: { x: event.clientX, y: event.clientY },
+      startDocument: document,
+      timerId: -1,
+      activated: false,
+      cancelled: false,
+      moved: false,
+    };
+    press.timerId = window.setTimeout(() => {
+      const current = portPressRef.current;
+      if (current !== press || current.cancelled) return;
+      current.activated = true;
+      setPortReposition({ componentId: current.componentId, portId: current.portId });
+      setSelection({ kind: "element", id: current.componentId });
+      setEditingPortId(current.portId);
+      setNotice("接口已进入位置调整模式；沿中心框拖动，松手后自动等距分布");
+    }, PORT_LONG_PRESS_MS);
+    portPressRef.current = press;
   };
 
   const startElementDrag = (event: ReactPointerEvent, element: CanvasElement) => {
@@ -896,6 +1015,51 @@ function App() {
   };
 
   const handleCanvasPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const portPress = portPressRef.current;
+    if (portPress?.pointerId === event.pointerId) {
+      if (!portPress.activated) {
+        const distance = Math.hypot(
+          event.clientX - portPress.startClient.x,
+          event.clientY - portPress.startClient.y,
+        );
+        if (distance > PORT_PRESS_MOVE_TOLERANCE && !portPress.cancelled) {
+          portPress.cancelled = true;
+          window.clearTimeout(portPress.timerId);
+        }
+        return;
+      }
+
+      const component = document.elements.find(
+        (element): element is ComponentElement =>
+          element.kind === "component" && element.id === portPress.componentId,
+      );
+      if (!component) return;
+      const world = clientToWorld(event.clientX, event.clientY);
+      const placement = nearestComponentEdgePlacement(component, world);
+      const currentPort = component.ports.find((port) => port.id === portPress.portId);
+      if (!currentPort) return;
+      if (currentPort.edge !== placement.edge || Math.abs(currentPort.offset - placement.offset) > 0.001) {
+        portPress.moved = true;
+        setHistory((current) => ({
+          ...current,
+          present: {
+            ...current.present,
+            elements: current.present.elements.map((element) =>
+              element.kind === "component" && element.id === portPress.componentId
+                ? {
+                    ...element,
+                    ports: element.ports.map((port) =>
+                      port.id === portPress.portId ? { ...port, ...placement } : port,
+                    ),
+                  }
+                : element,
+            ),
+          },
+        }));
+      }
+      return;
+    }
+
     if (panDrag?.pointerId === event.pointerId) {
       setViewport((current) => ({
         ...current,
@@ -1013,6 +1177,42 @@ function App() {
   };
 
   const handleCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const portPress = portPressRef.current;
+    if (portPress?.pointerId === event.pointerId) {
+      window.clearTimeout(portPress.timerId);
+      portPressRef.current = null;
+      const cancelled = event.type === "pointercancel";
+      if (cancelled && portPress.activated && portPress.moved) {
+        setHistory((current) => ({ ...current, present: portPress.startDocument }));
+      } else if (portPress.activated && portPress.moved) {
+        setHistory((current) => ({
+          past: [...current.past.slice(-79), portPress.startDocument],
+          present: markUpdated({
+            ...current.present,
+            elements: current.present.elements.map((element) => {
+              if (element.kind !== "component" || element.id !== portPress.componentId) return element;
+              const movedPort = element.ports.find((port) => port.id === portPress.portId);
+              return movedPort
+                ? {
+                    ...element,
+                    ports: distributePortsOnEdges(
+                      element.ports,
+                      [portPress.originEdge, movedPort.edge],
+                    ),
+                  }
+                : element;
+            }),
+          }),
+          future: [],
+        }));
+        setNotice("接口位置已更新；所在边的接口已自动等距分布");
+      } else if (!portPress.activated && !portPress.cancelled && !cancelled) {
+        activatePortConnection(portPress.componentId, portPress.portId);
+      }
+      setPortReposition(null);
+      return;
+    }
+
     if (networkPointDrag?.pointerId === event.pointerId) {
       setHistory((current) => ({
         past: [...current.past.slice(-79), networkPointDrag.startDocument],
@@ -1031,30 +1231,6 @@ function App() {
       setElementDrag(null);
     }
     if (panDrag?.pointerId === event.pointerId) setPanDrag(null);
-  };
-
-  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const bounds = canvasRef.current?.getBoundingClientRect();
-    if (!bounds) return;
-    if (event.ctrlKey || event.metaKey) {
-      const local = { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
-      const world = {
-        x: (local.x - viewport.x) / viewport.zoom,
-        y: (local.y - viewport.y) / viewport.zoom,
-      };
-      const zoom = Math.max(
-        MIN_ZOOM,
-        Math.min(MAX_ZOOM, viewport.zoom * Math.exp(-event.deltaY * 0.004)),
-      );
-      setViewport({ zoom, x: local.x - world.x * zoom, y: local.y - world.y * zoom });
-      return;
-    }
-    setViewport((current) => ({
-      ...current,
-      x: current.x - event.deltaX,
-      y: current.y - event.deltaY,
-    }));
   };
 
   const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
@@ -1125,6 +1301,24 @@ function App() {
     [commit],
   );
 
+  const moveComponentPortEdge = useCallback(
+    (componentId: string, portId: string, edge: PortEdge) => {
+      commit((current) => {
+        let changed = false;
+        const elements = current.elements.map((element) => {
+          if (element.id !== componentId || element.kind !== "component") return element;
+          const ports = movePortToEdge(element.ports, portId, edge);
+          if (ports === element.ports) return element;
+          changed = true;
+          return { ...element, ports };
+        });
+        return changed ? { ...current, elements } : current;
+      });
+      setNotice(`接口已移到${portEdgeLabels[edge]}，两侧接口已自动等距分布`);
+    },
+    [commit],
+  );
+
   const removeComponentPort = useCallback(
     (componentId: string, portId: string) => {
       const removedRef = portRef(componentId, portId);
@@ -1132,7 +1326,16 @@ function App() {
         ...current,
         elements: current.elements.map((element) =>
           element.id === componentId && element.kind === "component"
-            ? { ...element, ports: element.ports.filter((port) => port.id !== portId) }
+            ? (() => {
+                const removed = element.ports.find((port) => port.id === portId);
+                const remaining = element.ports.filter((port) => port.id !== portId);
+                return {
+                  ...element,
+                  ports: removed
+                    ? distributePortsOnEdges(remaining, [removed.edge])
+                    : remaining,
+                };
+              })()
             : element,
         ),
         networks: current.networks.flatMap((network) => {
@@ -1201,6 +1404,7 @@ function App() {
         return;
       }
       if (event.key === "Escape") {
+        cancelPortInteraction(true);
         setWireDraft(null);
         setSelection(null);
         setTool("select");
@@ -1227,7 +1431,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [chooseProject, redo, removeSelection, saveProject, undo]);
+  }, [cancelPortInteraction, chooseProject, redo, removeSelection, saveProject, undo]);
 
   const updatePortGap = useCallback(
     (value: number) => {
@@ -1460,7 +1664,6 @@ function App() {
           onPointerMove={handleCanvasPointerMove}
           onPointerUp={handleCanvasPointerUp}
           onPointerCancel={handleCanvasPointerUp}
-          onWheel={handleWheel}
           onDragOver={(event) => event.preventDefault()}
           onDrop={handleDrop}
         >
@@ -1614,7 +1817,7 @@ function App() {
                   return (
                     <article
                       key={element.id}
-                      className={`component-node ${isSelected ? "selected" : ""}`}
+                      className={`component-node ${isSelected ? "selected" : ""} ${portReposition?.componentId === element.id ? "port-repositioning" : ""}`}
                       style={{
                         left: element.x,
                         top: element.y,
@@ -1638,7 +1841,7 @@ function App() {
                       {element.ports.map((port) => (
                         <button
                           key={port.id}
-                          className={`port ${port.edge} ${port.domain} ${wireDraft?.sourceRef === portRef(element.id, port.id) ? "source" : ""}`}
+                          className={`port ${port.edge} ${port.domain} ${wireDraft?.sourceRef === portRef(element.id, port.id) ? "source" : ""} ${portReposition?.componentId === element.id && portReposition.portId === port.id ? "repositioning" : ""}`}
                           style={{
                             [port.edge === "left" || port.edge === "right" ? "top" : "left"]: `${port.offset * 100}%`,
                           } as React.CSSProperties}
@@ -1719,8 +1922,8 @@ function App() {
             </button>
           </div>
           <div className="canvas-status">
-            <span className={`status-tool ${wireDraft ? "connecting" : ""}`}>
-              {wireDraft ? "连线中" : toolItems.find((item) => item.id === tool)?.label}
+            <span className={`status-tool ${portReposition ? "positioning" : wireDraft ? "connecting" : ""}`}>
+              {portReposition ? "接口定位" : wireDraft ? "连线中" : toolItems.find((item) => item.id === tool)?.label}
             </span>
             {snapGuides && <span className="status-snap">平行 / 90° 吸附</span>}
             <span>{notice}</span>
@@ -1827,7 +2030,11 @@ function App() {
                               <span>所在边</span>
                               <select
                                 value={port.edge}
-                                onChange={(event) => updateComponentPort(selectedElement.id, port.id, { edge: event.target.value as PortEdge })}
+                                onChange={(event) => moveComponentPortEdge(
+                                  selectedElement.id,
+                                  port.id,
+                                  event.target.value as PortEdge,
+                                )}
                               >
                                 {Object.entries(portEdgeLabels).map(([edge, label]) => (
                                   <option value={edge} key={edge}>{label}</option>
