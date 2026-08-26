@@ -131,18 +131,20 @@ export const defaultRoutePointsToHub = (
   edge: InterfacePort["edge"],
   hub: Point,
 ): Point[] => {
-  const stub = 22;
+  // Give every port a visible outward lead before the first 90° turn so the
+  // route does not run along the edge of the port box.
+  const stub = 28;
   if (edge === "left" || edge === "right") {
     const stubX = point.x + (edge === "left" ? -stub : stub);
     return [
       { x: stubX, y: point.y },
-      { x: hub.x, y: point.y },
+      { x: stubX, y: hub.y },
     ];
   }
   const stubY = point.y + (edge === "top" ? -stub : stub);
   return [
     { x: point.x, y: stubY },
-    { x: point.x, y: hub.y },
+    { x: hub.x, y: stubY },
   ];
 };
 
