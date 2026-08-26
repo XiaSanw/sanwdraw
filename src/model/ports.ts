@@ -1,4 +1,5 @@
 import type { InterfacePort, PortEdge } from "./types";
+import { portRef } from "./types";
 
 const DISTRIBUTION_MIN = 0.08;
 const DISTRIBUTION_MAX = 0.92;
@@ -41,4 +42,24 @@ export const movePortToEdge = (
     port.id === portId ? { ...port, edge } : port,
   );
   return distributePortsOnEdges(moved, [movingPort.edge, edge]);
+};
+
+/** Return the member references whose rendered endpoint actually moved. */
+export const changedPortRefs = (
+  componentId: string,
+  previousPorts: InterfacePort[],
+  nextPorts: InterfacePort[],
+) => {
+  const previousById = new Map(previousPorts.map((port) => [port.id, port]));
+  return nextPorts.flatMap((port) => {
+    const previous = previousById.get(port.id);
+    if (
+      !previous ||
+      previous.edge !== port.edge ||
+      Math.abs(previous.offset - port.offset) > 0.0001
+    ) {
+      return [portRef(componentId, port.id)];
+    }
+    return [];
+  });
 };

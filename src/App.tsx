@@ -26,8 +26,8 @@ import {
   snapPointToOrthogonalAnchors,
 } from "./canvas/geometry";
 import { exportSanwdraw, importSanwdraw } from "./model/archive";
-import { disconnectNetworkBranch } from "./model/networks";
-import { distributePortsOnEdges, movePortToEdge } from "./model/ports";
+import { disconnectNetworkBranch, resetNetworkRoutesForMembers } from "./model/networks";
+import { changedPortRefs, distributePortsOnEdges, movePortToEdge } from "./model/ports";
 import { createSampleDocument } from "./model/sampleDocument";
 import {
   clampPortGap,
@@ -69,6 +69,7 @@ type PanDrag = { pointerId: number; clientOrigin: Point; viewportOrigin: Point }
 type WireDraft = { sourceRef: string; cursor: Point };
 type SnapGuides = { x?: number; y?: number };
 type PortReposition = { componentId: string; portId: string };
+type EditingPort = { componentId: string; portId: string };
 type PortPress = {
   pointerId: number;
   componentId: string;
@@ -111,7 +112,7 @@ const MIN_LIBRARY_WIDTH = 180;
 const MAX_LIBRARY_WIDTH = 420;
 const ORTHOGONAL_SNAP_SCREEN_DISTANCE = 12;
 const PORT_LONG_PRESS_MS = 420;
-const PORT_PRESS_MOVE_TOLERANCE = 7;
+const PORT_PRESS_MOVE_TOLERANCE = 10;
 const LIBRARY_WIDTH_KEY = "sanwdraw.libraryWidth";
 const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
 
@@ -244,7 +245,7 @@ function App() {
   const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
-  const [editingPortId, setEditingPortId] = useState<string | null>(null);
+  const [editingPort, setEditingPort] = useState<EditingPort | null>(null);
   const [elementDrag, setElementDrag] = useState<ElementDrag | null>(null);
   const [panDrag, setPanDrag] = useState<PanDrag | null>(null);
   const [networkPointDrag, setNetworkPointDrag] = useState<NetworkPointDrag | null>(null);
@@ -286,10 +287,6 @@ function App() {
   const selectedBranchColor = selectedBranch
     ? selectedBranch.network.branchColors?.[selectedBranch.memberRef] ?? selectedBranch.network.color
     : undefined;
-
-  useEffect(() => {
-    setEditingPortId(null);
-  }, [selectedElement?.id]);
 
   useEffect(() => {
     window.localStorage.setItem(LIBRARY_WIDTH_KEY, String(libraryWidth));
@@ -800,7 +797,8 @@ function App() {
       sourceRef: ref,
       cursor: getPortPoint(endpoint.component, endpoint.port, portGap),
     });
-    setSelection(null);
+    setSelection({ kind: "element", id: componentId });
+    setEditingPort({ componentId, portId });
     setNotice("点击另一个接口或已有连线；靠近水平/垂直方向会吸附，按住 Alt 可临时关闭");
   };
 
@@ -839,7 +837,6 @@ function App() {
       current.activated = true;
       setPortReposition({ componentId: current.componentId, portId: current.portId });
       setSelection({ kind: "element", id: current.componentId });
-      setEditingPortId(current.portId);
       setNotice("接口已进入位置调整模式；沿中心框拖动，松手后自动等距分布");
     }, PORT_LONG_PRESS_MS);
     portPressRef.current = press;
@@ -1185,26 +1182,35 @@ function App() {
       if (cancelled && portPress.activated && portPress.moved) {
         setHistory((current) => ({ ...current, present: portPress.startDocument }));
       } else if (portPress.activated && portPress.moved) {
-        setHistory((current) => ({
-          past: [...current.past.slice(-79), portPress.startDocument],
-          present: markUpdated({
-            ...current.present,
-            elements: current.present.elements.map((element) => {
-              if (element.kind !== "component" || element.id !== portPress.componentId) return element;
-              const movedPort = element.ports.find((port) => port.id === portPress.portId);
-              return movedPort
-                ? {
-                    ...element,
-                    ports: distributePortsOnEdges(
-                      element.ports,
-                      [portPress.originEdge, movedPort.edge],
-                    ),
-                  }
-                : element;
+        setHistory((current) => {
+          const startComponent = portPress.startDocument.elements.find(
+            (element): element is ComponentElement =>
+              element.kind === "component" && element.id === portPress.componentId,
+          );
+          let reroutedRefs: string[] = [];
+          const elements = current.present.elements.map((element) => {
+            if (element.kind !== "component" || element.id !== portPress.componentId) return element;
+            const movedPort = element.ports.find((port) => port.id === portPress.portId);
+            if (!movedPort) return element;
+            const ports = distributePortsOnEdges(
+              element.ports,
+              [portPress.originEdge, movedPort.edge],
+            );
+            if (startComponent) {
+              reroutedRefs = changedPortRefs(element.id, startComponent.ports, ports);
+            }
+            return { ...element, ports };
+          });
+          return {
+            past: [...current.past.slice(-79), portPress.startDocument],
+            present: markUpdated({
+              ...current.present,
+              elements,
+              networks: resetNetworkRoutesForMembers(current.present.networks, reroutedRefs),
             }),
-          }),
-          future: [],
-        }));
+            future: [],
+          };
+        });
         setNotice("接口位置已更新；所在边的接口已自动等距分布");
       } else if (!portPress.activated && !portPress.cancelled && !cancelled) {
         activatePortConnection(portPress.componentId, portPress.portId);
@@ -1276,7 +1282,7 @@ function App() {
             : element,
         ),
       }));
-      setEditingPortId(newPort.id);
+      setEditingPort({ componentId: component.id, portId: newPort.id });
       setNotice("已添加端口，可在右侧编辑名称、类型和位置");
     },
     [commit],
@@ -1284,19 +1290,28 @@ function App() {
 
   const updateComponentPort = useCallback(
     (componentId: string, portId: string, patch: Partial<InterfacePort>) => {
-      commit((current) => ({
-        ...current,
-        elements: current.elements.map((element) =>
-          element.id === componentId && element.kind === "component"
-            ? {
-                ...element,
-                ports: element.ports.map((port) =>
-                  port.id === portId ? { ...port, ...patch } : port,
-                ),
-              }
-            : element,
-        ),
-      }));
+      commit((current) => {
+        let endpointMoved = false;
+        const elements = current.elements.map((element) => {
+          if (element.id !== componentId || element.kind !== "component") return element;
+          return {
+            ...element,
+            ports: element.ports.map((port) => {
+              if (port.id !== portId) return port;
+              const next = { ...port, ...patch };
+              endpointMoved = port.edge !== next.edge || Math.abs(port.offset - next.offset) > 0.0001;
+              return next;
+            }),
+          };
+        });
+        return {
+          ...current,
+          elements,
+          networks: endpointMoved
+            ? resetNetworkRoutesForMembers(current.networks, [portRef(componentId, portId)])
+            : current.networks,
+        };
+      });
     },
     [commit],
   );
@@ -1305,14 +1320,22 @@ function App() {
     (componentId: string, portId: string, edge: PortEdge) => {
       commit((current) => {
         let changed = false;
+        let reroutedRefs: string[] = [];
         const elements = current.elements.map((element) => {
           if (element.id !== componentId || element.kind !== "component") return element;
           const ports = movePortToEdge(element.ports, portId, edge);
           if (ports === element.ports) return element;
           changed = true;
+          reroutedRefs = changedPortRefs(componentId, element.ports, ports);
           return { ...element, ports };
         });
-        return changed ? { ...current, elements } : current;
+        return changed
+          ? {
+              ...current,
+              elements,
+              networks: resetNetworkRoutesForMembers(current.networks, reroutedRefs),
+            }
+          : current;
       });
       setNotice(`接口已移到${portEdgeLabels[edge]}，两侧接口已自动等距分布`);
     },
@@ -1322,29 +1345,32 @@ function App() {
   const removeComponentPort = useCallback(
     (componentId: string, portId: string) => {
       const removedRef = portRef(componentId, portId);
-      commit((current) => ({
-        ...current,
-        elements: current.elements.map((element) =>
-          element.id === componentId && element.kind === "component"
-            ? (() => {
-                const removed = element.ports.find((port) => port.id === portId);
-                const remaining = element.ports.filter((port) => port.id !== portId);
-                return {
-                  ...element,
-                  ports: removed
-                    ? distributePortsOnEdges(remaining, [removed.edge])
-                    : remaining,
-                };
-              })()
-            : element,
-        ),
-        networks: current.networks.flatMap((network) => {
+      commit((current) => {
+        let reroutedRefs: string[] = [];
+        const elements = current.elements.map((element) => {
+          if (element.id !== componentId || element.kind !== "component") return element;
+          const removed = element.ports.find((port) => port.id === portId);
+          const remaining = element.ports.filter((port) => port.id !== portId);
+          const ports = removed
+            ? distributePortsOnEdges(remaining, [removed.edge])
+            : remaining;
+          reroutedRefs = changedPortRefs(componentId, element.ports, ports);
+          return { ...element, ports };
+        });
+        const connectedNetworks = current.networks.flatMap((network) => {
           if (!network.memberIds.includes(removedRef)) return [network];
           const nextNetwork = disconnectNetworkBranch(network, removedRef);
           return nextNetwork ? [nextNetwork] : [];
-        }),
-      }));
-      setEditingPortId((current) => current === portId ? null : current);
+        });
+        return {
+          ...current,
+          elements,
+          networks: resetNetworkRoutesForMembers(connectedNetworks, reroutedRefs),
+        };
+      });
+      setEditingPort((current) =>
+        current?.componentId === componentId && current.portId === portId ? null : current,
+      );
       setWireDraft((current) => current?.sourceRef === removedRef ? null : current);
       setNotice("已删除端口；对应母线支路已断开，其他支路保持不变");
     },
@@ -1983,10 +2009,15 @@ function App() {
                 </button>
                 <div className="port-property-list">
                   {selectedElement.ports.map((port) => {
-                    const editing = editingPortId === port.id;
+                    const editing = editingPort?.componentId === selectedElement.id && editingPort.portId === port.id;
                     return (
                       <div className={`port-property editable ${editing ? "editing" : ""}`} key={port.id}>
-                        <button className="port-property-summary" onClick={() => setEditingPortId(editing ? null : port.id)}>
+                        <button
+                          className="port-property-summary"
+                          onClick={() => setEditingPort(
+                            editing ? null : { componentId: selectedElement.id, portId: port.id },
+                          )}
+                        >
                           <span className={`property-port-dot ${port.domain}`} />
                           <span className="port-property-copy">
                             <strong>{port.name}</strong>
