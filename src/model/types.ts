@@ -74,6 +74,8 @@ export type Network = {
   /** Optional per-branch color overrides, keyed by port reference. */
   branchColors?: Record<string, string>;
   junction?: Point;
+  /** Label offset from the internal junction; moving it never changes routing. */
+  labelOffset?: Point;
   /** Intermediate bend points for each member branch, keyed by port reference. */
   routes?: Record<string, Point[]>;
 };

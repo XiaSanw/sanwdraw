@@ -106,6 +106,14 @@ type NetworkPointDrag =
       networkId: string;
       startDocument: SanwDocument;
     };
+type NetworkLabelDrag = {
+  pointerId: number;
+  networkId: string;
+  origin: Point;
+  labelOrigin: Point;
+  startDocument: SanwDocument;
+  moved: boolean;
+};
 type LibraryResize = {
   pointerId: number;
   startX: number;
@@ -174,6 +182,15 @@ const portDetails = (port: InterfacePort) => [
 
 const PORT_OFFSET_MIN = 0.08;
 const PORT_OFFSET_MAX = 0.92;
+const DEFAULT_NETWORK_LABEL_OFFSET = { x: 12, y: -14 };
+const NETWORK_LABEL_SNAP_DISTANCE = 10;
+
+const networkLabelSize = (network: Network) => ({
+  width: Math.max(94, network.name.length * 9),
+  height: 25,
+});
+
+const networkLabelOffset = (network: Network) => network.labelOffset ?? DEFAULT_NETWORK_LABEL_OFFSET;
 
 /** Move one port while keeping its neighbours separated on the affected edges. */
 const movePortWithNeighbours = (
@@ -342,6 +359,7 @@ function App() {
   const [marqueeDrag, setMarqueeDrag] = useState<MarqueeDrag | null>(null);
   const [panDrag, setPanDrag] = useState<PanDrag | null>(null);
   const [networkPointDrag, setNetworkPointDrag] = useState<NetworkPointDrag | null>(null);
+  const [networkLabelDrag, setNetworkLabelDrag] = useState<NetworkLabelDrag | null>(null);
   const [wireDraft, setWireDraft] = useState<WireDraft | null>(null);
   const [snapGuides, setSnapGuides] = useState<SnapGuides | null>(null);
   const [portReposition, setPortReposition] = useState<PortReposition | null>(null);
@@ -448,6 +466,15 @@ function App() {
     }
     setPortReposition(null);
   }, []);
+
+  const cancelNetworkLabelInteraction = useCallback((restoreDocument = false) => {
+    const drag = networkLabelDrag;
+    if (!drag) return;
+    if (restoreDocument && drag.moved) {
+      setHistory((current) => ({ ...current, present: drag.startDocument }));
+    }
+    setNetworkLabelDrag(null);
+  }, [networkLabelDrag]);
 
   useEffect(() => () => {
     portPressRef.current = null;
@@ -687,16 +714,18 @@ function App() {
     try {
       const next = await importSanwdraw(file);
       cancelPortInteraction();
+      cancelNetworkLabelInteraction();
       initialFitDone.current = false;
       setHistory({ past: [], present: next, future: [] });
       setSelection(null);
       setMarqueeDrag(null);
+      setNetworkLabelDrag(null);
       setWireDraft(null);
       setNotice(`已打开 ${file.name}`);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "工程文件打开失败");
     }
-  }, [cancelPortInteraction]);
+  }, [cancelNetworkLabelInteraction, cancelPortInteraction]);
 
   const chooseProject = useCallback(async () => {
     if (!isTauri()) {
@@ -1029,21 +1058,24 @@ function App() {
     setNotice("拖动拐点调整走线；靠近水平或垂直方向会自动吸附，按住 Alt 可自由拖动");
   };
 
-  const startJunctionDrag = (
+  const startNetworkLabelDrag = (
     event: ReactPointerEvent<SVGRectElement>,
     network: Network,
   ) => {
     if (tool !== "select") return;
+    event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
-    setNetworkPointDrag({
-      kind: "junction",
+    setNetworkLabelDrag({
       pointerId: event.pointerId,
       networkId: network.id,
+      origin: clientToWorld(event.clientX, event.clientY),
+      labelOrigin: networkLabelOffset(network),
       startDocument: document,
+      moved: false,
     });
     setSelection({ kind: "network", id: network.id });
-    setNotice("拖动汇合点调整共享网络位置；靠近水平或垂直方向会自动吸附");
+    setNotice("拖动母线标签；标签位置不会改变母线形状");
   };
 
   const addRoutePoint = (
@@ -1232,6 +1264,56 @@ function App() {
       return;
     }
     const world = clientToWorld(event.clientX, event.clientY);
+    if (networkLabelDrag?.pointerId === event.pointerId) {
+      const network = document.networks.find((item) => item.id === networkLabelDrag.networkId);
+      if (!network) return;
+      const hub = networkHub(document, network);
+      const size = networkLabelSize(network);
+      const dx = world.x - networkLabelDrag.origin.x;
+      const dy = world.y - networkLabelDrag.origin.y;
+      let nextOffset = {
+        x: networkLabelDrag.labelOrigin.x + dx,
+        y: networkLabelDrag.labelOrigin.y + dy,
+      };
+      const labelCenter = {
+        x: hub.x + nextOffset.x + size.width / 2,
+        y: hub.y + nextOffset.y + size.height / 2,
+      };
+      let closestPoint: Point | null = null;
+      let closestDistance = Number.POSITIVE_INFINITY;
+      getNetworkPoints(document, network).forEach((endpoint) => {
+        const routePoints = network.routes?.[endpoint.ref]
+          ?? defaultRoutePointsToHub(endpoint.point, endpoint.edge, hub);
+        const nearest = nearestPointOnPath([endpoint.point, ...routePoints, hub], labelCenter);
+        const distance = Math.hypot(labelCenter.x - nearest.point.x, labelCenter.y - nearest.point.y);
+        if (distance < closestDistance) {
+          closestDistance = distance;
+          closestPoint = nearest.point;
+        }
+      });
+      const snapPoint = closestPoint as Point | null;
+      if (snapPoint && closestDistance <= NETWORK_LABEL_SNAP_DISTANCE / viewport.zoom) {
+        nextOffset = {
+          x: snapPoint.x - hub.x - size.width / 2,
+          y: snapPoint.y - hub.y - size.height / 2,
+        };
+      }
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        setNetworkLabelDrag((active) => active?.pointerId === event.pointerId
+          ? { ...active, moved: true }
+          : active);
+      }
+      setHistory((current) => ({
+        ...current,
+        present: {
+          ...current.present,
+          networks: current.present.networks.map((item) =>
+            item.id === network.id ? { ...item, labelOffset: nextOffset } : item,
+          ),
+        },
+      }));
+      return;
+    }
     if (networkPointDrag?.pointerId === event.pointerId) {
       let dragPoint = world;
       let nextGuides: SnapGuides | null = null;
@@ -1400,6 +1482,22 @@ function App() {
       } else {
         setSelection({ kind: "elements", ids: marqueeDrag.hitIds });
         setNotice(`已框选 ${marqueeDrag.hitIds.length} 个对象；拖动任意对象可整体移动`);
+      }
+      return;
+    }
+
+    if (networkLabelDrag?.pointerId === event.pointerId) {
+      setNetworkLabelDrag(null);
+      const cancelled = event.type === "pointercancel";
+      if (cancelled && networkLabelDrag.moved) {
+        setHistory((current) => ({ ...current, present: networkLabelDrag.startDocument }));
+      } else if (networkLabelDrag.moved) {
+        setHistory((current) => ({
+          past: [...current.past.slice(-79), networkLabelDrag.startDocument],
+          present: markUpdated(current.present),
+          future: [],
+        }));
+        setNotice("母线标签位置已更新，母线走线保持不变");
       }
       return;
     }
@@ -1632,6 +1730,7 @@ function App() {
       }
       if (event.key === "Escape") {
         cancelPortInteraction(true);
+        cancelNetworkLabelInteraction(true);
         setMarqueeDrag(null);
         setWireDraft(null);
         setSelection(null);
@@ -1659,7 +1758,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [cancelPortInteraction, chooseProject, redo, removeSelection, saveProject, undo]);
+  }, [cancelNetworkLabelInteraction, cancelPortInteraction, chooseProject, redo, removeSelection, saveProject, undo]);
 
   const updatePortGap = useCallback(
     (value: number) => {
@@ -1986,14 +2085,6 @@ function App() {
                         </g>
                       );
                     })}
-                    <circle className="junction-halo" cx={hub.x} cy={hub.y} r={networkSelected ? 9 : 7} />
-                    <circle
-                      className="junction-dot"
-                      cx={hub.x}
-                      cy={hub.y}
-                      r={networkSelected ? 5.2 : 4.2}
-                      style={{ fill: network.color }}
-                    />
                     <circle
                       className="junction-hit-area"
                       cx={hub.x}
@@ -2008,28 +2099,17 @@ function App() {
                         }
                       }}
                     />
-                    {networkSelected && (
-                      <rect
-                        className="junction-drag-handle"
-                        x={hub.x - 7 / viewport.zoom}
-                        y={hub.y - 7 / viewport.zoom}
-                        width={14 / viewport.zoom}
-                        height={14 / viewport.zoom}
-                        rx={3 / viewport.zoom}
-                        onPointerDown={(event) => startJunctionDrag(event, network)}
-                      />
-                    )}
                     {points.length > 2 && (
-                      <g transform={`translate(${hub.x + 12} ${hub.y - 14})`}>
+                      <g transform={`translate(${hub.x + networkLabelOffset(network).x} ${hub.y + networkLabelOffset(network).y})`}>
                         <rect
                           className="net-label-bg net-label-hit"
-                          width={Math.max(94, network.name.length * 9)}
-                          height="25"
+                          width={networkLabelSize(network).width}
+                          height={networkLabelSize(network).height}
                           rx="8"
                           onPointerDown={(event) => {
                             event.stopPropagation();
                             if (wireDraft) connectPortToNetwork(wireDraft.sourceRef, network.id);
-                            else if (tool === "select") startJunctionDrag(event, network);
+                            else startNetworkLabelDrag(event, network);
                           }}
                         />
                         <text className="net-label" x="10" y="17">{network.name}</text>
@@ -2442,7 +2522,7 @@ function App() {
               </div>
               <div className="property-section route-editor-help">
                 <div className="property-section-title"><strong>走线编辑</strong><span>可自定义</span></div>
-                <p>这里会显示全部支路的拐点。拖动中心方点移动母线汇合位置。</p>
+                <p>这里会显示全部支路的拐点。母线汇合点作为内部拓扑隐藏，拖动名称标签只会调整标签位置。</p>
                 <button className="button secondary routing-reset" onClick={() => resetNetworkRouting(selectedNetwork.id)}>
                   恢复自动走线
                 </button>
