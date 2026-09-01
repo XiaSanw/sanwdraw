@@ -1113,11 +1113,11 @@ button {
   font-size: 7px;
   font-weight: 750;
   white-space: nowrap;
-  cursor: crosshair;
+  cursor: move;
   touch-action: none;
   box-shadow: 0 3px 8px rgba(80, 72, 44, 0.1);
   transform: translate(var(--port-x), var(--port-y));
-  transition: transform 0.14s var(--ease-out), box-shadow 0.14s ease;
+  transition: transform 0.2s var(--ease-out), box-shadow 0.14s ease;
 }
 
 .port-name {
@@ -1185,6 +1185,7 @@ button {
   border-radius: 999px;
   background: currentColor;
   box-shadow: 0 0 0 1px currentColor;
+  cursor: crosshair;
 }
 
 .port.left .port-dot { left: -4px; }

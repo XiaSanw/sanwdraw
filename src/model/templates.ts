@@ -13,7 +13,8 @@ const port = (
   offset: number,
   protocol?: string,
   voltage?: string,
-): InterfacePort => ({ id, name, domain, edge, offset, protocol, voltage });
+  current?: string,
+): InterfacePort => ({ id, name, domain, edge, offset, protocol, voltage, current });
 
 export const componentTemplates: ComponentTemplate[] = [
   {

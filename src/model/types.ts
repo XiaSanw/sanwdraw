@@ -9,6 +9,8 @@ export type InterfacePort = {
   domain: InterfaceDomain;
   protocol?: string;
   voltage?: string;
+  /** Optional continuous/load current annotation, e.g. "2A" or "≤6A". */
+  current?: string;
   edge: PortEdge;
   offset: number;
 };

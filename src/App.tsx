@@ -34,6 +34,8 @@ import {
   getDocumentPortGap,
   MAX_PORT_GAP,
   MIN_PORT_GAP,
+  PORT_BOX_HEIGHT,
+  PORT_BOX_WIDTH,
 } from "./model/settings";
 import { componentTemplates, instantiateTemplate, templateById } from "./model/templates";
 import type {
@@ -86,9 +88,7 @@ type PortPress = {
   originEdge: PortEdge;
   startClient: Point;
   startDocument: SanwDocument;
-  timerId: number;
   activated: boolean;
-  cancelled: boolean;
   moved: boolean;
 };
 type NetworkPointDrag =
@@ -120,7 +120,6 @@ const DEFAULT_LIBRARY_WIDTH = 238;
 const MIN_LIBRARY_WIDTH = 180;
 const MAX_LIBRARY_WIDTH = 420;
 const ORTHOGONAL_SNAP_SCREEN_DISTANCE = 12;
-const PORT_LONG_PRESS_MS = 420;
 const PORT_PRESS_MOVE_TOLERANCE = 10;
 const LIBRARY_WIDTH_KEY = "sanwdraw.libraryWidth";
 const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
@@ -165,6 +164,77 @@ const colorForProtocol = (domain: "power" | "signal", protocol?: string) => {
   if (protocol === "GPIO" || protocol === "PWM") return "#9a4d7b";
   if (protocol === "NPN" || protocol === "NPN/PNP") return "#15926b";
   return "#24829b";
+};
+
+const portDetails = (port: InterfacePort) => [
+  port.protocol,
+  `电压 ${port.voltage ?? "—"}`,
+  `电流 ${port.current ?? "—"}`,
+].filter(Boolean).join(" · ");
+
+const PORT_OFFSET_MIN = 0.08;
+const PORT_OFFSET_MAX = 0.92;
+
+/** Move one port while keeping its neighbours separated on the affected edges. */
+const movePortWithNeighbours = (
+  component: ComponentElement,
+  portId: string,
+  placement: { edge: PortEdge; offset: number },
+  originEdge: PortEdge,
+) => {
+  const movedPort = component.ports.find((port) => port.id === portId);
+  if (!movedPort) return component.ports;
+  let nextPorts = component.ports.map((port) =>
+    port.id === portId
+      ? { ...port, edge: placement.edge, offset: placement.offset }
+      : port,
+  );
+  const affectedEdges = new Set<PortEdge>([originEdge, placement.edge]);
+
+  affectedEdges.forEach((edge) => {
+    const edgePorts = nextPorts.filter((port) => port.edge === edge);
+    if (!edgePorts.length) return;
+    if (edge !== placement.edge) {
+      nextPorts = distributePortsOnEdges(nextPorts, [edge]);
+      return;
+    }
+
+    const moving = edgePorts.find((port) => port.id === portId);
+    if (!moving) return;
+    const others = edgePorts
+      .filter((port) => port.id !== portId)
+      .sort((a, b) => a.offset - b.offset);
+    const before = others.filter((port) => port.offset < placement.offset);
+    const after = others.filter((port) => port.offset >= placement.offset);
+    const span = PORT_OFFSET_MAX - PORT_OFFSET_MIN;
+    const physicalGap = edge === "left" || edge === "right"
+      ? (PORT_BOX_HEIGHT + 8) / component.height
+      : (PORT_BOX_WIDTH + 8) / component.width;
+    const gap = Math.min(span / Math.max(1, edgePorts.length - 1), physicalGap);
+    const movingOffset = Math.max(
+      PORT_OFFSET_MIN + before.length * gap,
+      Math.min(PORT_OFFSET_MAX - after.length * gap, placement.offset),
+    );
+    const offsets = new Map<string, number>([[portId, movingOffset]]);
+    let cursor = movingOffset - gap;
+    for (let index = before.length - 1; index >= 0; index -= 1) {
+      const port = before[index];
+      const offset = Math.max(PORT_OFFSET_MIN, Math.min(port.offset, cursor));
+      offsets.set(port.id, offset);
+      cursor = offset - gap;
+    }
+    cursor = movingOffset + gap;
+    after.forEach((port) => {
+      const offset = Math.min(PORT_OFFSET_MAX, Math.max(port.offset, cursor));
+      offsets.set(port.id, offset);
+      cursor = offset + gap;
+    });
+    nextPorts = nextPorts.map((port) => {
+      const offset = offsets.get(port.id);
+      return offset === undefined ? port : { ...port, offset };
+    });
+  });
+  return nextPorts;
 };
 
 const markUpdated = (document: SanwDocument): SanwDocument => ({
@@ -372,7 +442,6 @@ function App() {
   const cancelPortInteraction = useCallback((restoreDocument = false) => {
     const press = portPressRef.current;
     if (!press) return;
-    window.clearTimeout(press.timerId);
     portPressRef.current = null;
     if (restoreDocument && press.activated && press.moved) {
       setHistory((current) => ({ ...current, present: press.startDocument }));
@@ -381,8 +450,7 @@ function App() {
   }, []);
 
   useEffect(() => () => {
-    const press = portPressRef.current;
-    if (press) window.clearTimeout(press.timerId);
+    portPressRef.current = null;
   }, []);
 
   const undo = useCallback(() => {
@@ -825,7 +893,7 @@ function App() {
         const source = getPort(current, sourceRef);
         const network: Network = {
           id: createdNetworkId,
-          name: `${source?.port.protocol ?? source?.port.voltage ?? "新建"} 网络`,
+          name: `${source?.port.protocol ?? source?.port.voltage ?? source?.port.current ?? "新建"} 网络`,
           domain: source?.port.domain ?? "signal",
           protocol: source?.port.protocol,
           memberIds: [sourceRef, targetRef],
@@ -859,6 +927,17 @@ function App() {
     setNotice("点击另一个接口或已有连线；靠近水平/垂直方向会吸附，按住 Alt 可临时关闭");
   };
 
+  const handlePortContactPointerDown = (
+    event: ReactPointerEvent<HTMLSpanElement>,
+    component: ComponentElement,
+    portId: string,
+  ) => {
+    event.stopPropagation();
+    if (event.button !== 0) return;
+    event.preventDefault();
+    activatePortConnection(component.id, portId);
+  };
+
   const handlePortPointerDown = (
     event: ReactPointerEvent<HTMLButtonElement>,
     component: ComponentElement,
@@ -866,16 +945,19 @@ function App() {
   ) => {
     event.stopPropagation();
     if (event.button !== 0) return;
-    const ref = portRef(component.id, portId);
-    if (wireDraft) {
-      connectPorts(wireDraft.sourceRef, ref);
-      return;
-    }
     const port = component.ports.find((item) => item.id === portId);
     if (!port) return;
 
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    if (wireDraft) {
+      setWireDraft(null);
+      setTool("select");
+      setSnapGuides(null);
+      setNotice("已取消连线；接口已选中，可继续编辑或拖动位置");
+    }
+    setSelection({ kind: "element", id: component.id });
+    setEditingPort({ componentId: component.id, portId });
     const press: PortPress = {
       pointerId: event.pointerId,
       componentId: component.id,
@@ -883,19 +965,9 @@ function App() {
       originEdge: port.edge,
       startClient: { x: event.clientX, y: event.clientY },
       startDocument: document,
-      timerId: -1,
       activated: false,
-      cancelled: false,
       moved: false,
     };
-    press.timerId = window.setTimeout(() => {
-      const current = portPressRef.current;
-      if (current !== press || current.cancelled) return;
-      current.activated = true;
-      setPortReposition({ componentId: current.componentId, portId: current.portId });
-      setSelection({ kind: "element", id: current.componentId });
-      setNotice("接口已进入位置调整模式；沿中心框拖动，松手后自动等距分布");
-    }, PORT_LONG_PRESS_MS);
     portPressRef.current = press;
   };
 
@@ -1099,11 +1171,10 @@ function App() {
           event.clientX - portPress.startClient.x,
           event.clientY - portPress.startClient.y,
         );
-        if (distance > PORT_PRESS_MOVE_TOLERANCE && !portPress.cancelled) {
-          portPress.cancelled = true;
-          window.clearTimeout(portPress.timerId);
-        }
-        return;
+        if (distance <= PORT_PRESS_MOVE_TOLERANCE) return;
+        portPress.activated = true;
+        setPortReposition({ componentId: portPress.componentId, portId: portPress.portId });
+        setNotice("拖动接口框调整位置；相邻接口会自动避让，松手后所在边保持等距");
       }
 
       const component = document.elements.find(
@@ -1125,9 +1196,7 @@ function App() {
               element.kind === "component" && element.id === portPress.componentId
                 ? {
                     ...element,
-                    ports: element.ports.map((port) =>
-                      port.id === portPress.portId ? { ...port, ...placement } : port,
-                    ),
+                    ports: movePortWithNeighbours(element, portPress.portId, placement, portPress.originEdge),
                   }
                 : element,
             ),
@@ -1273,7 +1342,6 @@ function App() {
   const handleCanvasPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     const portPress = portPressRef.current;
     if (portPress?.pointerId === event.pointerId) {
-      window.clearTimeout(portPress.timerId);
       portPressRef.current = null;
       const cancelled = event.type === "pointercancel";
       if (cancelled && portPress.activated && portPress.moved) {
@@ -1289,10 +1357,7 @@ function App() {
             if (element.kind !== "component" || element.id !== portPress.componentId) return element;
             const movedPort = element.ports.find((port) => port.id === portPress.portId);
             if (!movedPort) return element;
-            const ports = distributePortsOnEdges(
-              element.ports,
-              [portPress.originEdge, movedPort.edge],
-            );
+            const ports = element.ports;
             if (startComponent) {
               reroutedRefs = changedPortRefs(element.id, startComponent.ports, ports);
             }
@@ -1309,8 +1374,10 @@ function App() {
           };
         });
         setNotice("接口位置已更新；所在边的接口已自动等距分布");
-      } else if (!portPress.activated && !portPress.cancelled && !cancelled) {
-        activatePortConnection(portPress.componentId, portPress.portId);
+      } else if (!portPress.activated && !cancelled) {
+        setSelection({ kind: "element", id: portPress.componentId });
+        setEditingPort({ componentId: portPress.componentId, portId: portPress.portId });
+        setNotice("已选中接口，可在右侧编辑信息或拖动接口框调整位置");
       }
       setPortReposition(null);
       return;
@@ -2002,9 +2069,14 @@ function App() {
                             [port.edge === "left" || port.edge === "right" ? "top" : "left"]: `${port.offset * 100}%`,
                           } as React.CSSProperties}
                           onPointerDown={(event) => handlePortPointerDown(event, element, port.id)}
-                          title={`${port.name}${port.protocol ? ` · ${port.protocol}` : ""}${port.voltage ? ` · ${port.voltage}` : ""}`}
+                          title={`${port.name} · ${portDetails(port)}`}
                         >
-                          <span className="port-dot" /><span className="port-name">{port.name}</span>
+                          <span
+                            className="port-dot"
+                            onPointerDown={(event) => handlePortContactPointerDown(event, element, port.id)}
+                            title="点击触点开始连线"
+                          />
+                          <span className="port-name">{port.name}</span>
                         </button>
                       ))}
                     </article>
@@ -2161,7 +2233,7 @@ function App() {
                           <span className={`property-port-dot ${port.domain}`} />
                           <span className="port-property-copy">
                             <strong>{port.name}</strong>
-                            <small>{port.protocol ?? port.voltage ?? "未设置标注"} · {portEdgeLabels[port.edge]}</small>
+                            <small>{portDetails(port)} · {portEdgeLabels[port.edge]}</small>
                           </span>
                           <em>{port.domain === "power" ? "电源" : "信号"}</em>
                         </button>
@@ -2230,6 +2302,14 @@ function App() {
                                 onChange={(event) => updateComponentPort(selectedElement.id, port.id, { voltage: event.target.value })}
                               />
                             </label>
+                            <label className="port-editor-field">
+                              <span>电流</span>
+                              <input
+                                value={port.current ?? ""}
+                                placeholder="2A / ≤6A"
+                                onChange={(event) => updateComponentPort(selectedElement.id, port.id, { current: event.target.value })}
+                              />
+                            </label>
                             <label className="port-editor-field full position-field">
                               <span>边缘位置 <em>{Math.round(port.offset * 100)}%</em></span>
                               <input
@@ -2247,6 +2327,7 @@ function App() {
                     );
                   })}
                 </div>
+                <p className="inspector-note">点击接口框可编辑信息并直接拖动调整位置；点击接口边缘的圆形触点才会开始连线。拖动时同侧接口会自动避让。</p>
               </div>
             </div>
           )}
@@ -2257,6 +2338,8 @@ function App() {
               <div className="field read-only"><span>所属母线</span><strong>{selectedBranch.network.name}</strong></div>
               <div className="field read-only"><span>连接模块</span><strong>{selectedBranch.component.name}</strong></div>
               <div className="field read-only split-field"><span>接口</span><strong>{selectedBranch.port.name}</strong></div>
+              <div className="field read-only split-field"><span>电压</span><strong>{selectedBranch.port.voltage ?? "—"}</strong></div>
+              <div className="field read-only split-field"><span>电流</span><strong>{selectedBranch.port.current ?? "—"}</strong></div>
               <div className="field read-only split-field"><span>母线支路数</span><strong>{selectedBranch.network.memberIds.length}</strong></div>
               <ColorProperty
                 label="支路颜色"
@@ -2319,7 +2402,7 @@ function App() {
                     return (
                       <div key={ref}>
                         <span className={`property-port-dot ${result.port.domain}`} />
-                        <p><strong>{result.component.name}</strong><small>{result.port.name}</small></p>
+                        <p><strong>{result.component.name}</strong><small>{result.port.name} · {portDetails(result.port)}</small></p>
                       </div>
                     );
                   })}
