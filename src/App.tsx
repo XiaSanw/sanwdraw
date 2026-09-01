@@ -1598,6 +1598,22 @@ function App() {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) return;
       const command = event.metaKey || event.ctrlKey;
+      if (command && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setMarqueeDrag(null);
+        const ids = document.elements.map((element) => element.id);
+        if (!ids.length) {
+          setSelection(null);
+          setNotice("画布上没有可选对象");
+        } else if (ids.length === 1) {
+          setSelection({ kind: "element", id: ids[0] });
+          setNotice("已选择画布上的 1 个对象");
+        } else {
+          setSelection({ kind: "elements", ids });
+          setNotice(`已选择画布上的 ${ids.length} 个对象`);
+        }
+        return;
+      }
       if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         if (event.shiftKey) redo();
@@ -2193,7 +2209,7 @@ function App() {
             <div className="inspector-content">
               <div className="selection-kind"><span className="multi-kind" />多选对象</div>
               <div className="multi-selection-summary">
-                <strong>已框选 {selection.ids.length} 个对象</strong>
+                <strong>已选择 {selection.ids.length} 个对象</strong>
                 <p>拖动任意已选对象可整体移动，按 Delete 可一起删除。按住 Shift 可继续追加框选。</p>
               </div>
             </div>
