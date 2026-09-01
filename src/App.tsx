@@ -385,6 +385,27 @@ function App() {
     if (selection?.kind === "elements") return selection.ids;
     return selection?.kind === "element" ? [selection.id] : [];
   }, [selection]);
+  const toggleElementSelection = (elementId: string) => {
+    const currentIds = selection?.kind === "elements"
+      ? selection.ids
+      : selection?.kind === "element"
+        ? [selection.id]
+        : [];
+    const nextIds = currentIds.includes(elementId)
+      ? currentIds.filter((id) => id !== elementId)
+      : [...currentIds, elementId];
+    if (!nextIds.length) {
+      setSelection(null);
+      setNotice("已取消选择");
+    } else if (nextIds.length === 1) {
+      setSelection({ kind: "element", id: nextIds[0] });
+      setNotice("已选择 1 个对象");
+    } else {
+      setSelection({ kind: "elements", ids: nextIds });
+      setNotice(`已选择 ${nextIds.length} 个对象`);
+    }
+    setEditingPort(null);
+  };
   const selectedNetwork = useMemo(
     () =>
       selection?.kind === "network"
@@ -978,6 +999,15 @@ function App() {
     if (!port) return;
 
     event.preventDefault();
+    if (event.metaKey || event.ctrlKey) {
+      if (wireDraft) {
+        setWireDraft(null);
+        setTool("select");
+        setSnapGuides(null);
+      }
+      toggleElementSelection(component.id);
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     if (wireDraft) {
       setWireDraft(null);
@@ -1003,6 +1033,11 @@ function App() {
   const startElementDrag = (event: ReactPointerEvent, element: CanvasElement) => {
     if (tool !== "select" || element.locked) return;
     event.stopPropagation();
+    if (event.metaKey || event.ctrlKey) {
+      event.preventDefault();
+      toggleElementSelection(element.id);
+      return;
+    }
     event.currentTarget.setPointerCapture(event.pointerId);
     const origin = clientToWorld(event.clientX, event.clientY);
     const elementIds = selection?.kind === "elements" && selection.ids.includes(element.id)
@@ -1699,6 +1734,7 @@ function App() {
       if (command && event.key.toLowerCase() === "a") {
         event.preventDefault();
         setMarqueeDrag(null);
+        setEditingPort(null);
         const ids = document.elements.map((element) => element.id);
         if (!ids.length) {
           setSelection(null);
@@ -2300,7 +2336,6 @@ function App() {
               <div className="selection-kind"><span className="multi-kind" />多选对象</div>
               <div className="multi-selection-summary">
                 <strong>已选择 {selection.ids.length} 个对象</strong>
-                <p>拖动任意已选对象可整体移动，按 Delete 可一起删除。按住 Shift 可继续追加框选。</p>
               </div>
             </div>
           )}
