@@ -55,15 +55,24 @@ import { Icon } from "./ui/Icon";
 type Tool = "select" | "wire" | "text" | "image" | "hand";
 type Selection =
   | { kind: "element" | "network"; id: string }
+  | { kind: "elements"; ids: string[] }
   | { kind: "branch"; networkId: string; memberRef: string }
   | null;
 type History = { past: SanwDocument[]; present: SanwDocument; future: SanwDocument[] };
 type ElementDrag = {
   pointerId: number;
-  elementId: string;
+  elementIds: string[];
   origin: Point;
-  elementOrigin: Point;
+  elementOrigins: Record<string, Point>;
   startDocument: SanwDocument;
+};
+type MarqueeDrag = {
+  pointerId: number;
+  origin: Point;
+  current: Point;
+  hitIds: string[];
+  additive: boolean;
+  baseIds: string[];
 };
 type PanDrag = { pointerId: number; clientOrigin: Point; viewportOrigin: Point };
 type WireDraft = { sourceRef: string; cursor: Point };
@@ -118,6 +127,19 @@ const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
 
 const clampLibraryWidth = (value: number) =>
   Math.max(MIN_LIBRARY_WIDTH, Math.min(MAX_LIBRARY_WIDTH, Math.round(value)));
+
+const normalizeRect = (start: Point, end: Point) => ({
+  x: Math.min(start.x, end.x),
+  y: Math.min(start.y, end.y),
+  width: Math.abs(end.x - start.x),
+  height: Math.abs(end.y - start.y),
+});
+
+const elementIntersectsRect = (element: CanvasElement, rect: ReturnType<typeof normalizeRect>) =>
+  element.x < rect.x + rect.width &&
+  element.x + element.width > rect.x &&
+  element.y < rect.y + rect.height &&
+  element.y + element.height > rect.y;
 
 const readStoredLibraryWidth = () => {
   const value = Number(window.localStorage.getItem(LIBRARY_WIDTH_KEY));
@@ -247,6 +269,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [editingPort, setEditingPort] = useState<EditingPort | null>(null);
   const [elementDrag, setElementDrag] = useState<ElementDrag | null>(null);
+  const [marqueeDrag, setMarqueeDrag] = useState<MarqueeDrag | null>(null);
   const [panDrag, setPanDrag] = useState<PanDrag | null>(null);
   const [networkPointDrag, setNetworkPointDrag] = useState<NetworkPointDrag | null>(null);
   const [wireDraft, setWireDraft] = useState<WireDraft | null>(null);
@@ -270,6 +293,10 @@ function App() {
         : undefined,
     [document.elements, selection],
   );
+  const selectedElementIds = useMemo(() => {
+    if (selection?.kind === "elements") return selection.ids;
+    return selection?.kind === "element" ? [selection.id] : [];
+  }, [selection]);
   const selectedNetwork = useMemo(
     () =>
       selection?.kind === "network"
@@ -595,6 +622,7 @@ function App() {
       initialFitDone.current = false;
       setHistory({ past: [], present: next, future: [] });
       setSelection(null);
+      setMarqueeDrag(null);
       setWireDraft(null);
       setNotice(`已打开 ${file.name}`);
     } catch (error) {
@@ -627,6 +655,33 @@ function App() {
   const removeSelection = useCallback(() => {
     if (!selection) return;
     commit((current) => {
+      if (selection.kind === "elements") {
+        const removedIds = new Set(selection.ids);
+        return {
+          ...current,
+          elements: current.elements.filter((element) => !removedIds.has(element.id)),
+          networks: current.networks
+            .map((network) => {
+              const memberIds = network.memberIds.filter((ref) => {
+                const separator = ref.indexOf(":");
+                return separator < 0 || !removedIds.has(ref.slice(0, separator));
+              });
+              const routes = Object.fromEntries(
+                Object.entries(network.routes ?? {}).filter(([ref]) => memberIds.includes(ref)),
+              );
+              const branchColors = Object.fromEntries(
+                Object.entries(network.branchColors ?? {}).filter(([ref]) => memberIds.includes(ref)),
+              );
+              return {
+                ...network,
+                memberIds,
+                routes: Object.keys(routes).length ? routes : undefined,
+                branchColors: Object.keys(branchColors).length ? branchColors : undefined,
+              };
+            })
+            .filter((network) => network.memberIds.length >= 2),
+        };
+      }
       if (selection.kind === "network") {
         return { ...current, networks: current.networks.filter((network) => network.id !== selection.id) };
       }
@@ -666,7 +721,9 @@ function App() {
           .filter((network) => network.memberIds.length >= 2),
       };
     });
-    if (selection.kind === "branch") {
+    if (selection.kind === "elements") {
+      setNotice(`已删除 ${selection.ids.length} 个对象`);
+    } else if (selection.kind === "branch") {
       setNotice("已断开所选支路，母线的其他连接保持不变");
     } else if (selection.kind === "network") {
       setNotice("已删除整条母线");
@@ -847,14 +904,23 @@ function App() {
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     const origin = clientToWorld(event.clientX, event.clientY);
+    const elementIds = selection?.kind === "elements" && selection.ids.includes(element.id)
+      ? selection.ids
+      : [element.id];
+    const elementOrigins = Object.fromEntries(
+      elementIds.flatMap((id) => {
+        const item = document.elements.find((candidate) => candidate.id === id);
+        return item ? [[id, { x: item.x, y: item.y }]] : [];
+      }),
+    );
     setElementDrag({
       pointerId: event.pointerId,
-      elementId: element.id,
+      elementIds,
       origin,
-      elementOrigin: { x: element.x, y: element.y },
+      elementOrigins,
       startDocument: document,
     });
-    setSelection({ kind: "element", id: element.id });
+    if (elementIds.length === 1) setSelection({ kind: "element", id: element.id });
   };
 
   const startRoutePointDrag = (
@@ -1000,6 +1066,7 @@ function App() {
       });
       return;
     }
+    if (event.button !== 0) return;
     if (tool === "text") {
       addText(world);
       return;
@@ -1007,6 +1074,19 @@ function App() {
     if (wireDraft) {
       setWireDraft(null);
       setNotice("已取消连线");
+    }
+    if (tool === "select") {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      const baseIds = event.shiftKey ? selectedElementIds : [];
+      setMarqueeDrag({
+        pointerId: event.pointerId,
+        origin: world,
+        current: world,
+        hitIds: baseIds,
+        additive: event.shiftKey,
+        baseIds,
+      });
+      return;
     }
     setSelection(null);
   };
@@ -1054,6 +1134,23 @@ function App() {
           },
         }));
       }
+      return;
+    }
+
+    if (marqueeDrag?.pointerId === event.pointerId) {
+      const current = clientToWorld(event.clientX, event.clientY);
+      const rect = normalizeRect(marqueeDrag.origin, current);
+      const hitIds = [
+        ...new Set([
+          ...marqueeDrag.baseIds,
+          ...document.elements
+            .filter((element) => elementIntersectsRect(element, rect))
+            .map((element) => element.id),
+        ]),
+      ];
+      setMarqueeDrag((active) => active?.pointerId === event.pointerId
+        ? { ...active, current, hitIds }
+        : active);
       return;
     }
 
@@ -1139,11 +1236,11 @@ function App() {
         present: {
           ...current.present,
           elements: current.present.elements.map((element) =>
-            element.id === elementDrag.elementId
+            elementDrag.elementIds.includes(element.id)
               ? {
                   ...element,
-                  x: elementDrag.elementOrigin.x + dx,
-                  y: elementDrag.elementOrigin.y + dy,
+                  x: (elementDrag.elementOrigins[element.id]?.x ?? element.x) + dx,
+                  y: (elementDrag.elementOrigins[element.id]?.y ?? element.y) + dy,
                 }
               : element,
           ),
@@ -1216,6 +1313,27 @@ function App() {
         activatePortConnection(portPress.componentId, portPress.portId);
       }
       setPortReposition(null);
+      return;
+    }
+
+    if (marqueeDrag?.pointerId === event.pointerId) {
+      setMarqueeDrag(null);
+      if (event.type === "pointercancel") return;
+      const rect = normalizeRect(marqueeDrag.origin, marqueeDrag.current);
+      if (rect.width < 4 && rect.height < 4) {
+        if (!marqueeDrag.additive) setSelection(null);
+        return;
+      }
+      if (!marqueeDrag.hitIds.length) {
+        setSelection(null);
+        setNotice("框选范围内没有对象");
+      } else if (marqueeDrag.hitIds.length === 1) {
+        setSelection({ kind: "element", id: marqueeDrag.hitIds[0] });
+        setNotice("已选中 1 个对象");
+      } else {
+        setSelection({ kind: "elements", ids: marqueeDrag.hitIds });
+        setNotice(`已框选 ${marqueeDrag.hitIds.length} 个对象；拖动任意对象可整体移动`);
+      }
       return;
     }
 
@@ -1431,6 +1549,7 @@ function App() {
       }
       if (event.key === "Escape") {
         cancelPortInteraction(true);
+        setMarqueeDrag(null);
         setWireDraft(null);
         setSelection(null);
         setTool("select");
@@ -1834,11 +1953,22 @@ function App() {
               })()}
             </svg>
 
+            {marqueeDrag && (() => {
+              const rect = normalizeRect(marqueeDrag.origin, marqueeDrag.current);
+              return (
+                <div
+                  className="selection-marquee"
+                  style={{ left: rect.x, top: rect.y, width: rect.width, height: rect.height }}
+                />
+              );
+            })()}
+
             {document.elements
               .slice()
               .sort((a, b) => a.zIndex - b.zIndex)
               .map((element) => {
-                const isSelected = selection?.kind === "element" && selection.id === element.id;
+                const isSelected = selectedElementIds.includes(element.id)
+                  || Boolean(marqueeDrag?.hitIds.includes(element.id));
                 if (element.kind === "component") {
                   return (
                     <article
@@ -1973,11 +2103,21 @@ function App() {
             )}
           </div>
 
-          {!selectedElement && !selectedNetwork && !selectedBranch && (
+          {!selectedElement && !selectedNetwork && !selectedBranch && selection?.kind !== "elements" && (
             <div className="empty-inspector">
               <div className="empty-illustration"><span /><span /><span /></div>
               <strong>选择画布对象</strong>
               <p>这里会显示组件、接口、网络、文字或图片的属性。</p>
+            </div>
+          )}
+
+          {selection?.kind === "elements" && (
+            <div className="inspector-content">
+              <div className="selection-kind"><span className="multi-kind" />多选对象</div>
+              <div className="multi-selection-summary">
+                <strong>已框选 {selection.ids.length} 个对象</strong>
+                <p>拖动任意已选对象可整体移动，按 Delete 可一起删除。按住 Shift 可继续追加框选。</p>
+              </div>
             </div>
           )}
 

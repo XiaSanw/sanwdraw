@@ -867,6 +867,15 @@ button {
   will-change: transform;
 }
 
+.selection-marquee {
+  position: absolute;
+  z-index: 30;
+  border: 1px solid rgba(58, 108, 212, 0.82);
+  background: rgba(143, 178, 234, 0.16);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.45) inset;
+  pointer-events: none;
+}
+
 .wire-layer {
   position: absolute;
   inset: 0;
@@ -1382,6 +1391,29 @@ button {
 
 .selection-kind .text-kind { background: #535f75; }
 .selection-kind .image-kind { background: #75869d; }
+.selection-kind .multi-kind {
+  background: var(--blue);
+  box-shadow: 4px 0 0 rgba(58, 108, 212, 0.28);
+}
+
+.multi-selection-summary {
+  padding: 14px;
+  border: 1px solid var(--signal-border);
+  border-radius: 12px;
+  background: var(--blue-softer);
+}
+
+.multi-selection-summary strong {
+  display: block;
+  color: var(--ink-strong);
+}
+
+.multi-selection-summary p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
 
 .field {
   display: flex;
