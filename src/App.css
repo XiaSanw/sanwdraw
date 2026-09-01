@@ -988,6 +988,11 @@ button {
   vector-effect: non-scaling-stroke;
 }
 
+.net-label-hit {
+  pointer-events: all !important;
+  cursor: move;
+}
+
 .net-label {
   fill: #5d6880;
   font-size: 10px;

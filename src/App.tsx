@@ -2021,7 +2021,17 @@ function App() {
                     )}
                     {points.length > 2 && (
                       <g transform={`translate(${hub.x + 12} ${hub.y - 14})`}>
-                        <rect className="net-label-bg" width={Math.max(94, network.name.length * 9)} height="25" rx="8" />
+                        <rect
+                          className="net-label-bg net-label-hit"
+                          width={Math.max(94, network.name.length * 9)}
+                          height="25"
+                          rx="8"
+                          onPointerDown={(event) => {
+                            event.stopPropagation();
+                            if (wireDraft) connectPortToNetwork(wireDraft.sourceRef, network.id);
+                            else if (tool === "select") startJunctionDrag(event, network);
+                          }}
+                        />
                         <text className="net-label" x="10" y="17">{network.name}</text>
                       </g>
                     )}
