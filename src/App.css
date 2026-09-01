@@ -934,6 +934,18 @@ button {
   stroke-width: 2;
 }
 
+.junction-dot {
+  stroke: #fff;
+  stroke-width: 1.5;
+  paint-order: stroke;
+  vector-effect: non-scaling-stroke;
+}
+
+.network.selected .junction-dot {
+  stroke: var(--blue);
+  stroke-width: 2.5;
+}
+
 .junction-hit-area {
   fill: transparent;
   stroke: transparent;
@@ -959,7 +971,7 @@ button {
 .junction-drag-handle {
   fill: rgba(255, 255, 255, 0.08);
   stroke: var(--blue);
-  stroke-width: 2;
+  stroke-width: 1.5;
   vector-effect: non-scaling-stroke;
   pointer-events: all !important;
   cursor: move;

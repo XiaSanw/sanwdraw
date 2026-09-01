@@ -119,7 +119,7 @@ const MAX_ZOOM = 2.2;
 const DEFAULT_LIBRARY_WIDTH = 238;
 const MIN_LIBRARY_WIDTH = 180;
 const MAX_LIBRARY_WIDTH = 420;
-const ORTHOGONAL_SNAP_SCREEN_DISTANCE = 12;
+const ORTHOGONAL_SNAP_SCREEN_DISTANCE = 6;
 const PORT_PRESS_MOVE_TOLERANCE = 10;
 const LIBRARY_WIDTH_KEY = "sanwdraw.libraryWidth";
 const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
@@ -1971,7 +1971,13 @@ function App() {
                       );
                     })}
                     <circle className="junction-halo" cx={hub.x} cy={hub.y} r={networkSelected ? 9 : 7} />
-                    <circle className="junction-dot" cx={hub.x} cy={hub.y} r={4.2} style={{ fill: network.color }} />
+                    <circle
+                      className="junction-dot"
+                      cx={hub.x}
+                      cy={hub.y}
+                      r={networkSelected ? 5.2 : 4.2}
+                      style={{ fill: network.color }}
+                    />
                     <circle
                       className="junction-hit-area"
                       cx={hub.x}
@@ -1989,11 +1995,11 @@ function App() {
                     {networkSelected && (
                       <rect
                         className="junction-drag-handle"
-                        x={hub.x - 9 / viewport.zoom}
-                        y={hub.y - 9 / viewport.zoom}
-                        width={18 / viewport.zoom}
-                        height={18 / viewport.zoom}
-                        rx={4 / viewport.zoom}
+                        x={hub.x - 7 / viewport.zoom}
+                        y={hub.y - 7 / viewport.zoom}
+                        width={14 / viewport.zoom}
+                        height={14 / viewport.zoom}
+                        rx={3 / viewport.zoom}
                         onPointerDown={(event) => startJunctionDrag(event, network)}
                       />
                     )}
