@@ -920,6 +920,7 @@ button {
   stroke-width: 18;
   pointer-events: stroke !important;
   cursor: pointer;
+  transition: d 0.16s var(--ease-out);
 }
 
 .wire-path {
@@ -928,7 +929,7 @@ button {
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
-  transition: stroke-width 0.12s ease;
+  transition: d 0.16s var(--ease-out), stroke-width 0.12s ease;
 }
 
 .network.selected .wire-path,

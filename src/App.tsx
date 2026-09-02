@@ -125,6 +125,19 @@ type LibraryResize = {
   startX: number;
   startWidth: number;
 };
+type AutomaticRoutingLayout = {
+  hubs: Map<string, Point>;
+  routes: Map<string, Point[]>;
+  paths: Map<string, Point[]>;
+  signatures: Map<string, string>;
+};
+
+const createEmptyAutomaticRoutingLayout = (): AutomaticRoutingLayout => ({
+  hubs: new Map(),
+  routes: new Map(),
+  paths: new Map(),
+  signatures: new Map(),
+});
 
 const WORLD_WIDTH = 6000;
 const WORLD_HEIGHT = 4000;
@@ -190,6 +203,7 @@ const PORT_OFFSET_MIN = 0.08;
 const PORT_OFFSET_MAX = 0.92;
 const DEFAULT_NETWORK_LABEL_OFFSET = { x: 12, y: -14 };
 const NETWORK_LABEL_SNAP_DISTANCE = 10;
+const ANIMATED_WIRE_POINT_COUNT = 24;
 
 const networkLabelSize = (network: Network) => ({
   width: Math.max(94, network.name.length * 9),
@@ -362,6 +376,9 @@ function App() {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const portPressRef = useRef<PortPress | null>(null);
   const initialFitDone = useRef(false);
+  const automaticRoutingPreferenceRef = useRef<AutomaticRoutingLayout>(
+    createEmptyAutomaticRoutingLayout(),
+  );
 
   const selectedElement = useMemo(
     () =>
@@ -375,26 +392,45 @@ function App() {
     [document],
   );
   const automaticRouting = useMemo(() => {
+    const previous = automaticRoutingPreferenceRef.current;
     const hubs = new Map<string, Point>();
     const routes = new Map<string, Point[]>();
+    const paths = new Map<string, Point[]>();
+    const signatures = new Map<string, string>();
     document.networks.forEach((network) => {
-      const hub = networkHub(document, network, routingObstacles);
+      const signature = [...network.memberIds].sort().join("|");
+      const sameNetwork = previous.signatures.get(network.id) === signature;
+      const hub = networkHub(
+        document,
+        network,
+        routingObstacles,
+        sameNetwork ? previous.hubs.get(network.id) : undefined,
+      );
       hubs.set(network.id, hub);
+      signatures.set(network.id, signature);
       getNetworkPoints(document, network).forEach((endpoint) => {
         if (network.routes?.[endpoint.ref]) return;
-        routes.set(
-          automaticRouteKey(network.id, endpoint.ref),
-          autoRoutePointsToHub(
-            endpoint.point,
-            endpoint.edge,
-            hub,
-            routingObstacles,
-          ),
+        const key = automaticRouteKey(network.id, endpoint.ref);
+        const preferredPath = sameNetwork ? previous.paths.get(key) : undefined;
+        const routePoints = autoRoutePointsToHub(
+          endpoint.point,
+          endpoint.edge,
+          hub,
+          routingObstacles,
+          preferredPath,
         );
+        routes.set(
+          key,
+          routePoints,
+        );
+        paths.set(key, [endpoint.point, ...routePoints, hub]);
       });
     });
-    return { hubs, routes };
+    return { hubs, routes, paths, signatures };
   }, [document, routingObstacles]);
+  useEffect(() => {
+    automaticRoutingPreferenceRef.current = automaticRouting;
+  }, [automaticRouting]);
   const hubForNetwork = (network: Network) =>
     automaticRouting.hubs.get(network.id) ?? networkHub(document, network, routingObstacles);
   const routePointsForBranch = (
@@ -771,6 +807,7 @@ function App() {
       cancelPortInteraction();
       cancelNetworkLabelInteraction();
       initialFitDone.current = false;
+      automaticRoutingPreferenceRef.current = createEmptyAutomaticRoutingLayout();
       setHistory({ past: [], present: next, future: [] });
       setSelection(null);
       setSelectedTemplateId(null);
@@ -1199,6 +1236,15 @@ function App() {
 
   const resetNetworkRouting = useCallback(
     (networkId: string) => {
+      const previous = automaticRoutingPreferenceRef.current;
+      previous.hubs.delete(networkId);
+      previous.signatures.delete(networkId);
+      [...previous.routes.keys()]
+        .filter((key) => key.startsWith(`${networkId}|`))
+        .forEach((key) => previous.routes.delete(key));
+      [...previous.paths.keys()]
+        .filter((key) => key.startsWith(`${networkId}|`))
+        .forEach((key) => previous.paths.delete(key));
       commit((current) => ({
         ...current,
         networks: current.networks.map((network) => {
@@ -1216,6 +1262,9 @@ function App() {
 
   const resetBranchRouting = useCallback(
     (networkId: string, memberRef: string) => {
+      const key = automaticRouteKey(networkId, memberRef);
+      automaticRoutingPreferenceRef.current.routes.delete(key);
+      automaticRoutingPreferenceRef.current.paths.delete(key);
       commit((current) => ({
         ...current,
         networks: current.networks.map((network) => {
@@ -2256,7 +2305,13 @@ function App() {
                         item.edge,
                         hub,
                       );
-                      const path = routeToHub(item.point, item.edge, hub, routePoints);
+                      const path = routeToHub(
+                        item.point,
+                        item.edge,
+                        hub,
+                        routePoints,
+                        ANIMATED_WIRE_POINT_COUNT,
+                      );
                       return (
                         <g
                           key={`${network.id}-${item.ref}`}

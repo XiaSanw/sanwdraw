@@ -20,6 +20,7 @@ const ROUTING_PORT_CLEARANCE = 8;
 const ROUTING_STUB_LENGTH = 28;
 const ROUTING_SEARCH_MARGIN = 180;
 const ROUTING_BEND_COST = 24;
+const ROUTING_STABILITY_WEIGHT = 0.22;
 const GEOMETRY_EPSILON = 0.001;
 
 export type RoutingObstacle = {
@@ -267,8 +268,15 @@ export const networkHub = (
   document: SanwDocument,
   network: Network,
   routingObstacles = getRoutingObstacles(document),
+  preferredHub?: Point,
 ): Point => {
   if (network.junction) return network.junction;
+  if (
+    preferredHub
+    && !routingObstacles.some((obstacle) => pointInsideObstacle(preferredHub, obstacle))
+  ) {
+    return preferredHub;
+  }
   const points = getNetworkPoints(document, network);
   if (!points.length) return { x: 0, y: 0 };
   return nearestFreeRoutingPoint({
@@ -367,6 +375,7 @@ export const autoRoutePointsToHub = (
   edge: InterfacePort["edge"],
   hub: Point,
   routingObstacles: RoutingObstacle[],
+  preferredPath: Point[] = [],
 ): Point[] => {
   const fallback = defaultRoutePointsToHub(point, edge, hub);
   const stub = fallback[0];
@@ -379,6 +388,12 @@ export const autoRoutePointsToHub = (
     && obstacle.x + obstacle.width > minX
     && obstacle.y < maxY
     && obstacle.y + obstacle.height > minY,
+  );
+  const preferredPoints = preferredPath.filter((preferredPoint) =>
+    preferredPoint.x >= minX
+    && preferredPoint.x <= maxX
+    && preferredPoint.y >= minY
+    && preferredPoint.y <= maxY,
   );
 
   const segmentIsClear = (start: Point, end: Point) =>
@@ -395,11 +410,13 @@ export const autoRoutePointsToHub = (
   const xValues = uniqueCoordinates([
     stub.x,
     hub.x,
+    ...preferredPoints.map((preferredPoint) => preferredPoint.x),
     ...obstacles.flatMap((obstacle) => [obstacle.x, obstacle.x + obstacle.width]),
   ]);
   const yValues = uniqueCoordinates([
     stub.y,
     hub.y,
+    ...preferredPoints.map((preferredPoint) => preferredPoint.y),
     ...obstacles.flatMap((obstacle) => [obstacle.y, obstacle.y + obstacle.height]),
   ]);
   const nodes: Point[] = [];
@@ -428,6 +445,39 @@ export const autoRoutePointsToHub = (
   if (startNode === undefined || targetNode === undefined) return fallback;
 
   const adjacency: RoutingEdge[][] = Array.from({ length: nodes.length }, () => []);
+  const segmentMatchesPreferredPath = (start: Point, end: Point) => {
+    for (let index = 0; index < preferredPoints.length - 1; index += 1) {
+      const preferredStart = preferredPoints[index];
+      const preferredEnd = preferredPoints[index + 1];
+      const horizontal = Math.abs(start.y - end.y) < GEOMETRY_EPSILON;
+      const preferredHorizontal = Math.abs(preferredStart.y - preferredEnd.y) < GEOMETRY_EPSILON;
+      if (horizontal !== preferredHorizontal) continue;
+      if (horizontal) {
+        if (Math.abs(start.y - preferredStart.y) > GEOMETRY_EPSILON) continue;
+        const minX = Math.max(
+          Math.min(start.x, end.x),
+          Math.min(preferredStart.x, preferredEnd.x),
+        );
+        const maxX = Math.min(
+          Math.max(start.x, end.x),
+          Math.max(preferredStart.x, preferredEnd.x),
+        );
+        if (maxX - minX > GEOMETRY_EPSILON) return true;
+      } else {
+        if (Math.abs(start.x - preferredStart.x) > GEOMETRY_EPSILON) continue;
+        const minY = Math.max(
+          Math.min(start.y, end.y),
+          Math.min(preferredStart.y, preferredEnd.y),
+        );
+        const maxY = Math.min(
+          Math.max(start.y, end.y),
+          Math.max(preferredStart.y, preferredEnd.y),
+        );
+        if (maxY - minY > GEOMETRY_EPSILON) return true;
+      }
+    }
+    return false;
+  };
   const connect = (from: number, to: number, direction: 1 | 2) => {
     if (!segmentIsClear(nodes[from], nodes[to])) return;
     const length = Math.abs(nodes[from].x - nodes[to].x) + Math.abs(nodes[from].y - nodes[to].y);
@@ -479,7 +529,11 @@ export const autoRoutePointsToHub = (
         ? ROUTING_BEND_COST
         : 0;
       const nextState = candidate.to * 3 + candidate.direction;
-      const nextCost = current.cost + candidate.length + bendCost;
+      const stabilityCost = preferredPoints.length > 1
+        && !segmentMatchesPreferredPath(nodes[node], nodes[candidate.to])
+        ? candidate.length * ROUTING_STABILITY_WEIGHT
+        : 0;
+      const nextCost = current.cost + candidate.length + bendCost + stabilityCost;
       if (nextCost >= distances[nextState]) return;
       distances[nextState] = nextCost;
       previousStates[nextState] = current.state;
@@ -503,9 +557,11 @@ export const routeToHub = (
   edge: InterfacePort["edge"],
   hub: Point,
   routePoints?: Point[],
+  minimumPointCount = 0,
 ) => {
   const bends = routePoints ?? defaultRoutePointsToHub(point, edge, hub);
   const points = [point, ...bends, hub];
+  while (points.length < minimumPointCount) points.push({ ...hub });
   return points
     .map((item, index) => `${index === 0 ? "M" : "L"} ${item.x} ${item.y}`)
     .join(" ");
