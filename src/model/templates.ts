@@ -188,8 +188,13 @@ export const componentTemplates: ComponentTemplate[] = [
   },
 ];
 
-export const templateById = (templateId: string) =>
-  componentTemplates.find((template) => template.id === templateId);
+export const cloneComponentTemplate = (template: ComponentTemplate): ComponentTemplate => ({
+  ...template,
+  resources: [...template.resources],
+  ports: template.ports.map((item) => ({ ...item })),
+});
+
+export const cloneComponentTemplates = () => componentTemplates.map(cloneComponentTemplate);
 
 export const instantiateTemplate = (
   template: ComponentTemplate,
@@ -210,6 +215,6 @@ export const instantiateTemplate = (
   height: template.height,
   zIndex: 10,
   resources: [...template.resources],
-  ports: template.ports.map((item) => ({ ...item })),
+  ports: template.ports.map((item) => ({ ...item, enabled: false })),
   ...overrides,
 });

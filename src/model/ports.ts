@@ -14,7 +14,7 @@ export const distributePortsOnEdges = (
 
   edgeSet.forEach((edge) => {
     const edgePorts = ports
-      .filter((port) => port.edge === edge)
+      .filter((port) => port.edge === edge && port.enabled !== false)
       .sort((a, b) => a.offset - b.offset);
     edgePorts.forEach((port, index) => {
       const offset = edgePorts.length === 1

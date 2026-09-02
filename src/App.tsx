@@ -37,10 +37,15 @@ import {
   PORT_BOX_HEIGHT,
   PORT_BOX_WIDTH,
 } from "./model/settings";
-import { componentTemplates, instantiateTemplate, templateById } from "./model/templates";
+import {
+  cloneComponentTemplates,
+  componentTemplates,
+  instantiateTemplate,
+} from "./model/templates";
 import type {
   CanvasElement,
   ComponentElement,
+  ComponentTemplate,
   ImageElement,
   InterfacePort,
   Network,
@@ -209,7 +214,9 @@ const movePortWithNeighbours = (
   const affectedEdges = new Set<PortEdge>([originEdge, placement.edge]);
 
   affectedEdges.forEach((edge) => {
-    const edgePorts = nextPorts.filter((port) => port.edge === edge);
+    const edgePorts = nextPorts.filter(
+      (port) => port.edge === edge && port.enabled !== false,
+    );
     if (!edgePorts.length) return;
     if (edge !== placement.edge) {
       nextPorts = distributePortsOnEdges(nextPorts, [edge]);
@@ -355,6 +362,8 @@ function App() {
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
   const [editingPort, setEditingPort] = useState<EditingPort | null>(null);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [editingTemplatePortId, setEditingTemplatePortId] = useState<string | null>(null);
   const [elementDrag, setElementDrag] = useState<ElementDrag | null>(null);
   const [marqueeDrag, setMarqueeDrag] = useState<MarqueeDrag | null>(null);
   const [panDrag, setPanDrag] = useState<PanDrag | null>(null);
@@ -380,6 +389,11 @@ function App() {
         ? document.elements.find((element) => element.id === selection.id)
         : undefined,
     [document.elements, selection],
+  );
+  const libraryTemplates = document.libraryTemplates ?? componentTemplates;
+  const selectedTemplate = useMemo(
+    () => libraryTemplates.find((template) => template.id === selectedTemplateId),
+    [libraryTemplates, selectedTemplateId],
   );
   const selectedElementIds = useMemo(() => {
     if (selection?.kind === "elements") return selection.ids;
@@ -423,6 +437,10 @@ function App() {
   const selectedBranchColor = selectedBranch
     ? selectedBranch.network.branchColors?.[selectedBranch.memberRef] ?? selectedBranch.network.color
     : undefined;
+
+  useEffect(() => {
+    if (selection) setSelectedTemplateId(null);
+  }, [selection]);
 
   useEffect(() => {
     window.localStorage.setItem(LIBRARY_WIDTH_KEY, String(libraryWidth));
@@ -620,7 +638,7 @@ function App() {
 
   const addTemplate = useCallback(
     (templateId: string, at?: Point) => {
-      const template = templateById(templateId);
+      const template = libraryTemplates.find((item) => item.id === templateId);
       if (!template) return;
       const point = at ?? centerOfViewport();
       const instance = instantiateTemplate(
@@ -631,9 +649,9 @@ function App() {
       commit((current) => ({ ...current, elements: [...current.elements, instance] }));
       setSelection({ kind: "element", id: instance.id });
       setTool("select");
-      setNotice(`已添加 ${template.name}`);
+      setNotice(`已添加 ${template.name}；请在右侧启用本实例需要使用的端口`);
     },
-    [centerOfViewport, commit],
+    [centerOfViewport, commit, libraryTemplates],
   );
 
   const addText = useCallback(
@@ -739,6 +757,8 @@ function App() {
       initialFitDone.current = false;
       setHistory({ past: [], present: next, future: [] });
       setSelection(null);
+      setSelectedTemplateId(null);
+      setEditingTemplatePortId(null);
       setMarqueeDrag(null);
       setNetworkLabelDrag(null);
       setWireDraft(null);
@@ -1206,6 +1226,8 @@ function App() {
       return;
     }
     if (event.button !== 0) return;
+    setSelectedTemplateId(null);
+    setEditingTemplatePortId(null);
     if (tool === "text") {
       addText(world);
       return;
@@ -1581,29 +1603,132 @@ function App() {
     [commit],
   );
 
-  const addComponentPort = useCallback(
-    (component: ComponentElement) => {
-      const placement = nextPortPlacement(component.ports);
-      const newPort: InterfacePort = {
-        id: createId("port"),
-        name: "新端口",
-        domain: "signal",
-        edge: placement.edge,
-        offset: placement.offset,
-        protocol: "GPIO",
-      };
+  const updateLibraryTemplate = useCallback(
+    (templateId: string, patch: Partial<ComponentTemplate>) => {
       commit((current) => ({
         ...current,
-        elements: current.elements.map((element) =>
-          element.id === component.id && element.kind === "component"
-            ? { ...element, ports: [...element.ports, newPort] }
-            : element,
+        libraryTemplates: (current.libraryTemplates ?? cloneComponentTemplates()).map((template) =>
+          template.id === templateId ? { ...template, ...patch } : template,
         ),
       }));
-      setEditingPort({ componentId: component.id, portId: newPort.id });
-      setNotice("已添加端口，可在右侧编辑名称、类型和位置");
     },
     [commit],
+  );
+
+  const createLibraryTemplate = useCallback(() => {
+    const template: ComponentTemplate = {
+      id: createId("template"),
+      version: 1,
+      name: "新器件模板",
+      description: "在右侧定义器件属性和可用端口",
+      accent: "#4f78d5",
+      width: 220,
+      height: 150,
+      resources: [],
+      ports: [],
+    };
+    commit((current) => ({
+      ...current,
+      libraryTemplates: [...(current.libraryTemplates ?? cloneComponentTemplates()), template],
+    }));
+    setSelection(null);
+    setSelectedTemplateId(template.id);
+    setEditingTemplatePortId(null);
+    setNotice("已新建器件库模板；请在右侧定义属性和端口");
+  }, [commit]);
+
+  const removeSelectedTemplate = useCallback(() => {
+    if (!selectedTemplate) return;
+    commit((current) => ({
+      ...current,
+      libraryTemplates: (current.libraryTemplates ?? cloneComponentTemplates()).filter(
+        (template) => template.id !== selectedTemplate.id,
+      ),
+    }));
+    setSelectedTemplateId(null);
+    setEditingTemplatePortId(null);
+    setNotice(`已从器件库删除 ${selectedTemplate.name}；画布上的既有器件不受影响`);
+  }, [commit, selectedTemplate]);
+
+  const updateTemplatePort = useCallback(
+    (templateId: string, portId: string, patch: Partial<InterfacePort>) => {
+      commit((current) => ({
+        ...current,
+        libraryTemplates: (current.libraryTemplates ?? cloneComponentTemplates()).map((template) =>
+          template.id === templateId
+            ? {
+                ...template,
+                ports: template.ports.map((port) =>
+                  port.id === portId ? { ...port, ...patch, enabled: undefined } : port,
+                ),
+              }
+            : template,
+        ),
+      }));
+    },
+    [commit],
+  );
+
+  const moveTemplatePortEdge = useCallback(
+    (templateId: string, portId: string, edge: PortEdge) => {
+      commit((current) => ({
+        ...current,
+        libraryTemplates: (current.libraryTemplates ?? cloneComponentTemplates()).map((template) =>
+          template.id === templateId
+            ? { ...template, ports: movePortToEdge(template.ports, portId, edge) }
+            : template,
+        ),
+      }));
+    },
+    [commit],
+  );
+
+  const setTemplatePortCount = useCallback(
+    (template: ComponentTemplate, requestedCount: number) => {
+      const count = Math.max(0, Math.min(64, Math.round(requestedCount || 0)));
+      let ports: InterfacePort[] = template.ports.map((port) => ({ ...port, enabled: undefined }));
+      if (count < ports.length) {
+        ports = ports.slice(0, count);
+      } else {
+        while (ports.length < count) {
+          const placement = nextPortPlacement(ports);
+          ports.push({
+            id: createId("port"),
+            name: `端口 ${ports.length + 1}`,
+            domain: "signal",
+            protocol: "GPIO",
+            edge: placement.edge,
+            offset: placement.offset,
+          });
+        }
+      }
+      ports = distributePortsOnEdges(ports, ["left", "right", "top", "bottom"]);
+      updateLibraryTemplate(template.id, { ports });
+      setEditingTemplatePortId((current) =>
+        current && ports.some((port) => port.id === current) ? current : null,
+      );
+      setNotice(`模板端口数量已设为 ${count}`);
+    },
+    [updateLibraryTemplate],
+  );
+
+  const addTemplatePort = useCallback(
+    (template: ComponentTemplate) => setTemplatePortCount(template, template.ports.length + 1),
+    [setTemplatePortCount],
+  );
+
+  const removeTemplatePort = useCallback(
+    (template: ComponentTemplate, portId: string) => {
+      const removed = template.ports.find((port) => port.id === portId);
+      const remaining = template.ports.filter((port) => port.id !== portId);
+      const ports = removed
+        ? distributePortsOnEdges(remaining, [removed.edge])
+        : remaining;
+      updateLibraryTemplate(template.id, { ports });
+      setEditingTemplatePortId((current) => current === portId ? null : current);
+      setNotice("已从器件库模板删除端口；画布实例不受影响");
+    },
+    [updateLibraryTemplate],
   );
 
   const updateComponentPort = useCallback(
@@ -1660,37 +1785,39 @@ function App() {
     [commit],
   );
 
-  const removeComponentPort = useCallback(
-    (componentId: string, portId: string) => {
-      const removedRef = portRef(componentId, portId);
+  const setComponentPortEnabled = useCallback(
+    (componentId: string, portId: string, enabled: boolean) => {
+      const memberRef = portRef(componentId, portId);
       commit((current) => {
         let reroutedRefs: string[] = [];
         const elements = current.elements.map((element) => {
           if (element.id !== componentId || element.kind !== "component") return element;
-          const removed = element.ports.find((port) => port.id === portId);
-          const remaining = element.ports.filter((port) => port.id !== portId);
-          const ports = removed
-            ? distributePortsOnEdges(remaining, [removed.edge])
-            : remaining;
+          const target = element.ports.find((port) => port.id === portId);
+          if (!target) return element;
+          const toggled = element.ports.map((port) =>
+            port.id === portId ? { ...port, enabled } : port,
+          );
+          const ports = distributePortsOnEdges(toggled, [target.edge]);
           reroutedRefs = changedPortRefs(componentId, element.ports, ports);
           return { ...element, ports };
         });
-        const connectedNetworks = current.networks.flatMap((network) => {
-          if (!network.memberIds.includes(removedRef)) return [network];
-          const nextNetwork = disconnectNetworkBranch(network, removedRef);
-          return nextNetwork ? [nextNetwork] : [];
-        });
+        const connectedNetworks = enabled
+          ? current.networks
+          : current.networks.flatMap((network) => {
+              if (!network.memberIds.includes(memberRef)) return [network];
+              const nextNetwork = disconnectNetworkBranch(network, memberRef);
+              return nextNetwork ? [nextNetwork] : [];
+            });
         return {
           ...current,
           elements,
           networks: resetNetworkRoutesForMembers(connectedNetworks, reroutedRefs),
         };
       });
-      setEditingPort((current) =>
-        current?.componentId === componentId && current.portId === portId ? null : current,
-      );
-      setWireDraft((current) => current?.sourceRef === removedRef ? null : current);
-      setNotice("已删除端口；对应母线支路已断开，其他支路保持不变");
+      if (!enabled) {
+        setWireDraft((current) => current?.sourceRef === memberRef ? null : current);
+      }
+      setNotice(enabled ? "已在当前画布器件上启用端口" : "已隐藏端口并断开它的母线支路");
     },
     [commit],
   );
@@ -1770,13 +1897,16 @@ function App() {
         setMarqueeDrag(null);
         setWireDraft(null);
         setSelection(null);
+        setSelectedTemplateId(null);
+        setEditingTemplatePortId(null);
         setTool("select");
         setSettingsOpen(false);
         return;
       }
       if (event.key === "Delete" || event.key === "Backspace") {
         event.preventDefault();
-        removeSelection();
+        if (selectedTemplate) removeSelectedTemplate();
+        else removeSelection();
         return;
       }
       const shortcuts: Record<string, Tool> = {
@@ -1794,7 +1924,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [cancelNetworkLabelInteraction, cancelPortInteraction, chooseProject, redo, removeSelection, saveProject, undo]);
+  }, [cancelNetworkLabelInteraction, cancelPortInteraction, chooseProject, redo, removeSelectedTemplate, removeSelection, saveProject, selectedTemplate, undo]);
 
   const updatePortGap = useCallback(
     (value: number) => {
@@ -1808,7 +1938,7 @@ function App() {
     [commit],
   );
 
-  const visibleTemplates = componentTemplates.filter((template) => {
+  const visibleTemplates = libraryTemplates.filter((template) => {
     const haystack = `${template.name} ${template.resources.join(" ")}`;
     return haystack.toLowerCase().includes(query.trim().toLowerCase());
   });
@@ -1941,13 +2071,15 @@ function App() {
             <>
               <div className="panel-heading">
                 <div><p className="eyebrow">LIBRARY</p><h2>功能组件</h2></div>
-                <button className="mini-icon" title="新建组件模板"><Icon name="plus" size={16} /></button>
+                <button className="mini-icon" title="新建器件库模板" onClick={createLibraryTemplate}>
+                  <Icon name="plus" size={16} />
+                </button>
               </div>
               <label className="search-box">
                 <Icon name="search" size={16} />
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索组件或协议" />
               </label>
-              <div className="library-tip">拖到画布，或点击卡片右侧加号添加</div>
+              <div className="library-tip">点击卡片编辑模板；拖动或点右侧加号添加到画布</div>
               <div className="template-list">
                 {visibleTemplates.map((template) => {
                   const powerCount = template.ports.filter((port) => port.domain === "power").length;
@@ -1956,8 +2088,14 @@ function App() {
                     <div
                       key={template.id}
                       draggable
-                      className="template-card"
-                      onClick={() => setNotice("请点击卡片右侧加号添加器件，或直接拖到画布")}
+                      className={`template-card ${selectedTemplateId === template.id ? "selected" : ""}`}
+                      onClick={() => {
+                        setSelection(null);
+                        setEditingPort(null);
+                        setSelectedTemplateId(template.id);
+                        setEditingTemplatePortId(null);
+                        setNotice(`正在编辑器件库模板：${template.name}`);
+                      }}
                       onDragStart={(event) => {
                         event.dataTransfer.setData("application/x-sanwdraw-template", template.id);
                         event.dataTransfer.effectAllowed = "copy";
@@ -2220,8 +2358,11 @@ function App() {
                       <div className="resource-list">
                         {element.resources.map((resource) => <span key={resource}>{resource}</span>)}
                       </div>
-                      <div className="node-footer"><span>{element.ports.length} 个接口</span><span>v{element.templateVersion}</span></div>
-                      {element.ports.map((port) => (
+                      <div className="node-footer">
+                        <span>{element.ports.filter((port) => port.enabled !== false).length} / {element.ports.length} 个接口</span>
+                        <span>v{element.templateVersion}</span>
+                      </div>
+                      {element.ports.filter((port) => port.enabled !== false).map((port) => (
                         <button
                           key={port.id}
                           className={`port ${port.edge} ${port.domain} ${wireDraft?.sourceRef === portRef(element.id, port.id) ? "source" : ""} ${portReposition?.componentId === element.id && portReposition.portId === port.id ? "repositioning" : ""}`}
@@ -2324,22 +2465,196 @@ function App() {
         <aside className="inspector-panel">
           <div className="panel-heading inspector-heading">
             <div><p className="eyebrow">INSPECTOR</p><h2>属性</h2></div>
-            {selection && (
+            {(selection || selectedTemplate) && (
               <button
                 className="mini-icon danger"
-                onClick={removeSelection}
-                title={selection.kind === "branch" ? "断开此支路" : selection.kind === "network" ? "删除整条母线" : "删除"}
+                onClick={selectedTemplate ? removeSelectedTemplate : removeSelection}
+                title={selectedTemplate
+                  ? "从器件库删除模板"
+                  : selection?.kind === "branch"
+                    ? "断开此支路"
+                    : selection?.kind === "network"
+                      ? "删除整条母线"
+                      : "删除画布对象"}
               >
                 <Icon name="trash" size={16} />
               </button>
             )}
           </div>
 
-          {!selectedElement && !selectedNetwork && !selectedBranch && selection?.kind !== "elements" && (
+          {!selectedTemplate && !selectedElement && !selectedNetwork && !selectedBranch && selection?.kind !== "elements" && (
             <div className="empty-inspector">
               <div className="empty-illustration"><span /><span /><span /></div>
               <strong>选择画布对象</strong>
               <p>这里会显示组件、接口、网络、文字或图片的属性。</p>
+            </div>
+          )}
+
+          {selectedTemplate && (
+            <div className="inspector-content">
+              <div className="selection-kind">
+                <span style={{ background: selectedTemplate.accent }} />器件库模板
+              </div>
+              <p className="inspector-context-note">这里编辑的是左侧器件库定义，不会改动画布上已经放置的器件。</p>
+              <label className="field">
+                <span>模板名称</span>
+                <input
+                  value={selectedTemplate.name}
+                  onChange={(event) => updateLibraryTemplate(selectedTemplate.id, { name: event.target.value })}
+                />
+              </label>
+              <ColorProperty
+                label="模板颜色"
+                color={selectedTemplate.accent}
+                onChange={(color) => updateLibraryTemplate(selectedTemplate.id, { accent: color })}
+              />
+              <label className="field">
+                <span>描述</span>
+                <textarea
+                  rows={3}
+                  value={selectedTemplate.description}
+                  placeholder="说明这个器件在系统中的用途"
+                  onChange={(event) => updateLibraryTemplate(selectedTemplate.id, { description: event.target.value })}
+                />
+              </label>
+              <div className="dimension-fields">
+                <label className="field">
+                  <span>默认宽度</span>
+                  <input
+                    type="number"
+                    min="120"
+                    max="800"
+                    value={selectedTemplate.width}
+                    onChange={(event) => updateLibraryTemplate(selectedTemplate.id, {
+                      width: Math.max(120, Math.min(800, Number(event.target.value) || 120)),
+                    })}
+                  />
+                </label>
+                <label className="field">
+                  <span>默认高度</span>
+                  <input
+                    type="number"
+                    min="100"
+                    max="800"
+                    value={selectedTemplate.height}
+                    onChange={(event) => updateLibraryTemplate(selectedTemplate.id, {
+                      height: Math.max(100, Math.min(800, Number(event.target.value) || 100)),
+                    })}
+                  />
+                </label>
+              </div>
+              <div className="property-section">
+                <div className="property-section-title"><strong>可用端口</strong><span>{selectedTemplate.ports.length}</span></div>
+                <label className="field template-port-count">
+                  <span>端口数量</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="64"
+                    value={selectedTemplate.ports.length}
+                    onChange={(event) => setTemplatePortCount(selectedTemplate, Number(event.target.value))}
+                  />
+                </label>
+                <button className="button secondary add-port-button" onClick={() => addTemplatePort(selectedTemplate)}>
+                  <Icon name="plus" size={14} /> 添加一个端口
+                </button>
+                <div className="port-property-list">
+                  {selectedTemplate.ports.map((port) => {
+                    const editing = editingTemplatePortId === port.id;
+                    return (
+                      <div className={`port-property editable ${editing ? "editing" : ""}`} key={port.id}>
+                        <button
+                          className="port-property-summary"
+                          onClick={() => setEditingTemplatePortId(editing ? null : port.id)}
+                        >
+                          <span className={`property-port-dot ${port.domain}`} />
+                          <span className="port-property-copy">
+                            <strong>{port.name}</strong>
+                            <small>{portDetails(port)} · {portEdgeLabels[port.edge]}</small>
+                          </span>
+                          <em>{port.domain === "power" ? "电源" : "信号"}</em>
+                        </button>
+                        <button
+                          className="mini-icon danger port-delete"
+                          onClick={() => removeTemplatePort(selectedTemplate, port.id)}
+                          title={`从模板删除端口 ${port.name}`}
+                        >
+                          <Icon name="trash" size={13} />
+                        </button>
+                        {editing && (
+                          <div className="port-editor">
+                            <label className="port-editor-field full">
+                              <span>端口名称</span>
+                              <input
+                                value={port.name}
+                                onChange={(event) => updateTemplatePort(selectedTemplate.id, port.id, { name: event.target.value })}
+                              />
+                            </label>
+                            <label className="port-editor-field">
+                              <span>类型</span>
+                              <select
+                                value={port.domain}
+                                onChange={(event) => {
+                                  const domain = event.target.value as InterfacePort["domain"];
+                                  updateTemplatePort(selectedTemplate.id, port.id, {
+                                    domain,
+                                    protocol: domain === "signal" ? (port.protocol ?? "GPIO") : undefined,
+                                  });
+                                }}
+                              >
+                                <option value="power">电源</option>
+                                <option value="signal">信号</option>
+                              </select>
+                            </label>
+                            <label className="port-editor-field">
+                              <span>默认边</span>
+                              <select
+                                value={port.edge}
+                                onChange={(event) => moveTemplatePortEdge(
+                                  selectedTemplate.id,
+                                  port.id,
+                                  event.target.value as PortEdge,
+                                )}
+                              >
+                                {Object.entries(portEdgeLabels).map(([edge, label]) => (
+                                  <option value={edge} key={edge}>{label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            {port.domain === "signal" && (
+                              <label className="port-editor-field">
+                                <span>协议</span>
+                                <input
+                                  value={port.protocol ?? ""}
+                                  placeholder="CAN / GPIO / UART"
+                                  onChange={(event) => updateTemplatePort(selectedTemplate.id, port.id, { protocol: event.target.value })}
+                                />
+                              </label>
+                            )}
+                            <label className="port-editor-field">
+                              <span>电压</span>
+                              <input
+                                value={port.voltage ?? ""}
+                                placeholder="24V / 3.3V"
+                                onChange={(event) => updateTemplatePort(selectedTemplate.id, port.id, { voltage: event.target.value })}
+                              />
+                            </label>
+                            <label className="port-editor-field">
+                              <span>电流</span>
+                              <input
+                                value={port.current ?? ""}
+                                placeholder="2A / ≤6A"
+                                onChange={(event) => updateTemplatePort(selectedTemplate.id, port.id, { current: event.target.value })}
+                              />
+                            </label>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <p className="inspector-note">模板可以预先定义很多端口；添加到画布后，端口默认隐藏，只启用当前实例实际使用的端口。</p>
+              </div>
             </div>
           )}
 
@@ -2374,15 +2689,16 @@ function App() {
                 />
               </label>
               <div className="property-section">
-                <div className="property-section-title"><strong>端口</strong><span>{selectedElement.ports.length}</span></div>
-                <button className="button secondary add-port-button" onClick={() => addComponentPort(selectedElement)}>
-                  <Icon name="plus" size={14} /> 添加端口
-                </button>
+                <div className="property-section-title">
+                  <strong>实例端口</strong>
+                  <span>{selectedElement.ports.filter((port) => port.enabled !== false).length} / {selectedElement.ports.length}</span>
+                </div>
                 <div className="port-property-list">
                   {selectedElement.ports.map((port) => {
                     const editing = editingPort?.componentId === selectedElement.id && editingPort.portId === port.id;
+                    const enabled = port.enabled !== false;
                     return (
-                      <div className={`port-property editable ${editing ? "editing" : ""}`} key={port.id}>
+                      <div className={`port-property instance-port-property editable ${editing ? "editing" : ""} ${enabled ? "enabled" : "disabled"}`} key={port.id}>
                         <button
                           className="port-property-summary"
                           onClick={() => setEditingPort(
@@ -2397,11 +2713,11 @@ function App() {
                           <em>{port.domain === "power" ? "电源" : "信号"}</em>
                         </button>
                         <button
-                          className="mini-icon danger port-delete"
-                          onClick={() => removeComponentPort(selectedElement.id, port.id)}
-                          title={`删除端口 ${port.name}`}
+                          className={`mini-icon port-visibility ${enabled ? "enabled" : ""}`}
+                          onClick={() => setComponentPortEnabled(selectedElement.id, port.id, !enabled)}
+                          title={enabled ? `隐藏端口 ${port.name}` : `启用端口 ${port.name}`}
                         >
-                          <Icon name="trash" size={13} />
+                          <Icon name={enabled ? "visible" : "hidden"} size={14} />
                         </button>
                         {editing && (
                           <div className="port-editor">
@@ -2486,11 +2802,8 @@ function App() {
                     );
                   })}
                 </div>
-                <p className="inspector-note">点击接口框可编辑信息并直接拖动调整位置；点击接口边缘的圆形触点才会开始连线。拖动时同侧接口会自动避让。</p>
+                <p className="inspector-note">先用眼睛按钮启用当前实例需要的端口。画布只显示已启用端口；点击接口框可编辑或拖动位置，点击圆形触点才开始连线。</p>
               </div>
-              <button className="button branch-disconnect" onClick={removeSelection}>
-                <Icon name="trash" size={14} /> 删除器件
-              </button>
             </div>
           )}
 

@@ -760,6 +760,11 @@ button {
   box-shadow: var(--shadow-lift);
 }
 
+.template-card.selected {
+  border-color: #8eb0ef;
+  box-shadow: 0 0 0 2px rgba(58, 108, 212, 0.1), var(--shadow-lift);
+}
+
 .template-card:active {
   cursor: grabbing;
 }
@@ -791,13 +796,13 @@ button {
 }
 
 .template-add {
-  width: 30px;
-  height: 30px;
+  width: 22px;
+  height: 22px;
   display: grid;
   place-items: center;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
   color: var(--faint);
   cursor: pointer;
@@ -806,7 +811,7 @@ button {
 
 .template-add:hover {
   color: var(--blue);
-  background: var(--blue-soft);
+  background: rgba(58, 108, 212, 0.07);
 }
 
 .template-counts {
@@ -1568,6 +1573,27 @@ button {
   box-shadow: 0 0 0 2px rgba(58, 108, 212, 0.1);
 }
 
+.instance-port-property.disabled {
+  border-style: dashed;
+  background: #fbfaf6;
+}
+
+.instance-port-property.disabled .port-property-summary {
+  opacity: 0.58;
+}
+
+.port-visibility {
+  width: 26px;
+  height: 26px;
+  align-self: center;
+  color: #a0a7b4;
+}
+
+.port-visibility.enabled {
+  color: var(--blue);
+  background: rgba(58, 108, 212, 0.08);
+}
+
 .port-property-summary {
   min-width: 0;
   display: flex;
@@ -1640,6 +1666,27 @@ button {
   justify-content: center;
   margin-bottom: 8px;
   font-size: 10px;
+}
+
+.inspector-context-note {
+  margin: -2px 0 2px;
+  padding: 8px 9px;
+  border-left: 2px solid var(--blue);
+  border-radius: 0 7px 7px 0;
+  background: rgba(58, 108, 212, 0.055);
+  color: #697386;
+  font-size: 9px;
+  line-height: 1.55;
+}
+
+.dimension-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+}
+
+.template-port-count {
+  margin-bottom: 8px;
 }
 
 .property-color-control {

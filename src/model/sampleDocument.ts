@@ -10,7 +10,11 @@ const fixedInstance = (
 ): ComponentElement => {
   const template = componentTemplates.find((item) => item.id === templateId);
   if (!template) throw new Error(`Missing template: ${templateId}`);
-  return instantiateTemplate(template, x, y, { id });
+  const instance = instantiateTemplate(template, x, y, { id });
+  return {
+    ...instance,
+    ports: instance.ports.map((port) => ({ ...port, enabled: true })),
+  };
 };
 
 const sectionLabel = (

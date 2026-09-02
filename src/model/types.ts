@@ -11,6 +11,8 @@ export type InterfacePort = {
   voltage?: string;
   /** Optional continuous/load current annotation, e.g. "2A" or "≤6A". */
   current?: string;
+  /** Canvas instances may keep a template port available without rendering it. */
+  enabled?: boolean;
   edge: PortEdge;
   offset: number;
 };
@@ -101,6 +103,8 @@ export type SanwDocument = {
   createdAt: string;
   updatedAt: string;
   settings?: DocumentSettings;
+  /** Editable component definitions shown in the left library. */
+  libraryTemplates?: ComponentTemplate[];
   elements: CanvasElement[];
   networks: Network[];
   assets: Record<string, AssetRecord>;

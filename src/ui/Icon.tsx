@@ -2,6 +2,8 @@ import type { LucideIcon } from "lucide-react";
 import {
   ChevronLeft,
   ChevronRight,
+  Eye,
+  EyeOff,
   FolderOpen,
   Hand,
   Image,
@@ -38,7 +40,9 @@ export type IconName =
   | "close"
   | "settings"
   | "chevron-left"
-  | "chevron-right";
+  | "chevron-right"
+  | "visible"
+  | "hidden";
 
 const icons: Record<IconName, LucideIcon> = {
   select: MousePointer2,
@@ -59,6 +63,8 @@ const icons: Record<IconName, LucideIcon> = {
   settings: SlidersHorizontal,
   "chevron-left": ChevronLeft,
   "chevron-right": ChevronRight,
+  visible: Eye,
+  hidden: EyeOff,
 };
 
 export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
