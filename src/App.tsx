@@ -1947,17 +1947,17 @@ function App() {
                 <Icon name="search" size={16} />
                 <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索组件或协议" />
               </label>
-              <div className="library-tip">拖到画布，或单击添加到视图中心</div>
+              <div className="library-tip">拖到画布，或点击卡片右侧加号添加</div>
               <div className="template-list">
                 {visibleTemplates.map((template) => {
                   const powerCount = template.ports.filter((port) => port.domain === "power").length;
                   const signalCount = template.ports.length - powerCount;
                   return (
-                    <button
+                    <div
                       key={template.id}
                       draggable
                       className="template-card"
-                      onClick={() => addTemplate(template.id)}
+                      onClick={() => setNotice("请点击卡片右侧加号添加器件，或直接拖到画布")}
                       onDragStart={(event) => {
                         event.dataTransfer.setData("application/x-sanwdraw-template", template.id);
                         event.dataTransfer.effectAllowed = "copy";
@@ -1971,8 +1971,20 @@ function App() {
                           {signalCount > 0 && <em className="count signal">信号 {signalCount}</em>}
                         </span>
                       </span>
-                      <Icon name="plus" size={15} />
-                    </button>
+                      <button
+                        type="button"
+                        className="template-add"
+                        aria-label={`添加 ${template.name}`}
+                        title="添加到画布"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          addTemplate(template.id);
+                        }}
+                      >
+                        <Icon name="plus" size={15} />
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -2476,6 +2488,9 @@ function App() {
                 </div>
                 <p className="inspector-note">点击接口框可编辑信息并直接拖动调整位置；点击接口边缘的圆形触点才会开始连线。拖动时同侧接口会自动避让。</p>
               </div>
+              <button className="button branch-disconnect" onClick={removeSelection}>
+                <Icon name="trash" size={14} /> 删除器件
+              </button>
             </div>
           )}
 

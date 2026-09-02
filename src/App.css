@@ -790,13 +790,23 @@ button {
   font-size: 9px;
 }
 
-.template-card > svg {
+.template-add {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
   color: var(--faint);
-  transition: color 0.15s ease;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease;
 }
 
-.template-card:hover > svg {
+.template-add:hover {
   color: var(--blue);
+  background: var(--blue-soft);
 }
 
 .template-counts {
