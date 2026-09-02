@@ -14,11 +14,12 @@ import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialo
 import { readFile, writeFile } from "@tauri-apps/plugin-fs";
 import "./App.css";
 import {
-  defaultRoutePointsToHub,
+  autoRoutePointsToHub,
   documentBounds,
   getNetworkPoints,
   getPort,
   getPortPoint,
+  getRoutingObstacles,
   nearestComponentEdgePlacement,
   nearestPointOnPath,
   networkHub,
@@ -196,6 +197,7 @@ const networkLabelSize = (network: Network) => ({
 });
 
 const networkLabelOffset = (network: Network) => network.labelOffset ?? DEFAULT_NETWORK_LABEL_OFFSET;
+const automaticRouteKey = (networkId: string, memberRef: string) => `${networkId}|${memberRef}`;
 
 /** Move one port while keeping its neighbours separated on the affected edges. */
 const movePortWithNeighbours = (
@@ -368,6 +370,42 @@ function App() {
         : undefined,
     [document.elements, selection],
   );
+  const routingObstacles = useMemo(
+    () => getRoutingObstacles(document),
+    [document],
+  );
+  const automaticRouting = useMemo(() => {
+    const hubs = new Map<string, Point>();
+    const routes = new Map<string, Point[]>();
+    document.networks.forEach((network) => {
+      const hub = networkHub(document, network, routingObstacles);
+      hubs.set(network.id, hub);
+      getNetworkPoints(document, network).forEach((endpoint) => {
+        if (network.routes?.[endpoint.ref]) return;
+        routes.set(
+          automaticRouteKey(network.id, endpoint.ref),
+          autoRoutePointsToHub(
+            endpoint.point,
+            endpoint.edge,
+            hub,
+            routingObstacles,
+          ),
+        );
+      });
+    });
+    return { hubs, routes };
+  }, [document, routingObstacles]);
+  const hubForNetwork = (network: Network) =>
+    automaticRouting.hubs.get(network.id) ?? networkHub(document, network, routingObstacles);
+  const routePointsForBranch = (
+    network: Network,
+    memberRef: string,
+    point: Point,
+    edge: PortEdge,
+    hub: Point,
+  ) => network.routes?.[memberRef]
+    ?? automaticRouting.routes.get(automaticRouteKey(network.id, memberRef))
+    ?? autoRoutePointsToHub(point, edge, hub, routingObstacles);
   const libraryTemplates = document.libraryTemplates ?? componentTemplates;
   const selectedTemplate = useMemo(
     () => libraryTemplates.find((template) => template.id === selectedTemplateId),
@@ -1122,7 +1160,7 @@ function App() {
     if (wireDraft || tool !== "select") return;
     event.stopPropagation();
     const pointer = clientToWorld(event.clientX, event.clientY);
-    const routePoints = (network.routes?.[memberRef] ?? defaultRoutePointsToHub(start, edge, hub))
+    const routePoints = routePointsForBranch(network, memberRef, start, edge, hub)
       .map((item) => ({ ...item }));
     const projection = nearestPointOnPath([start, ...routePoints, hub], pointer);
     routePoints.splice(projection.segmentIndex, 0, projection.point);
@@ -1302,7 +1340,7 @@ function App() {
     if (networkLabelDrag?.pointerId === event.pointerId) {
       const network = document.networks.find((item) => item.id === networkLabelDrag.networkId);
       if (!network) return;
-      const hub = networkHub(document, network);
+      const hub = hubForNetwork(network);
       const size = networkLabelSize(network);
       const dx = world.x - networkLabelDrag.origin.x;
       const dy = world.y - networkLabelDrag.origin.y;
@@ -1317,8 +1355,13 @@ function App() {
       let closestPoint: Point | null = null;
       let closestDistance = Number.POSITIVE_INFINITY;
       getNetworkPoints(document, network).forEach((endpoint) => {
-        const routePoints = network.routes?.[endpoint.ref]
-          ?? defaultRoutePointsToHub(endpoint.point, endpoint.edge, hub);
+        const routePoints = routePointsForBranch(
+          network,
+          endpoint.ref,
+          endpoint.point,
+          endpoint.edge,
+          hub,
+        );
         const nearest = nearestPointOnPath([endpoint.point, ...routePoints, hub], labelCenter);
         const distance = Math.hypot(labelCenter.x - nearest.point.x, labelCenter.y - nearest.point.y);
         if (distance < closestDistance) {
@@ -1359,10 +1402,15 @@ function App() {
           let anchors: Point[] = [];
           if (networkPointDrag.kind === "route") {
             const endpoint = endpoints.find((item) => item.ref === networkPointDrag.memberRef);
-            const hub = networkHub(document, network);
+            const hub = hubForNetwork(network);
             if (endpoint) {
-              const routePoints = network.routes?.[networkPointDrag.memberRef]
-                ?? defaultRoutePointsToHub(endpoint.point, endpoint.edge, hub);
+              const routePoints = routePointsForBranch(
+                network,
+                networkPointDrag.memberRef,
+                endpoint.point,
+                endpoint.edge,
+                hub,
+              );
               const previous = networkPointDrag.pointIndex === 0
                 ? endpoint.point
                 : routePoints[networkPointDrag.pointIndex - 1];
@@ -2192,7 +2240,7 @@ function App() {
               )}
               {document.networks.map((network) => {
                 const points = getNetworkPoints(document, network);
-                const hub = networkHub(document, network);
+                const hub = hubForNetwork(network);
                 const networkSelected = selection?.kind === "network" && selection.id === network.id;
                 const selectedBranchRef = selection?.kind === "branch" && selection.networkId === network.id
                   ? selection.memberRef
@@ -2201,8 +2249,13 @@ function App() {
                   <g key={network.id} className={networkSelected ? "network selected" : "network"}>
                     {points.map((item) => {
                       const branchSelected = selectedBranchRef === item.ref;
-                      const routePoints = network.routes?.[item.ref]
-                        ?? defaultRoutePointsToHub(item.point, item.edge, hub);
+                      const routePoints = routePointsForBranch(
+                        network,
+                        item.ref,
+                        item.point,
+                        item.edge,
+                        hub,
+                      );
                       const path = routeToHub(item.point, item.edge, hub, routePoints);
                       return (
                         <g
