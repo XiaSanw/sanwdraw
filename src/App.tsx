@@ -284,28 +284,6 @@ const portEdgeLabels: Record<PortEdge, string> = {
   bottom: "底部",
 };
 
-const nextPortPlacement = (ports: InterfacePort[]) => {
-  const edges: PortEdge[] = ["right", "left", "bottom", "top"];
-  const edge = edges.reduce((best, candidate) =>
-    ports.filter((port) => port.edge === candidate).length
-      < ports.filter((port) => port.edge === best).length
-      ? candidate
-      : best,
-  );
-  const positions = ports
-    .filter((port) => port.edge === edge)
-    .map((port) => port.offset)
-    .sort((a, b) => a - b);
-  if (!positions.length) return { edge, offset: 0.5 };
-  const boundaries = [0.08, ...positions, 0.92];
-  let largestGap = { start: boundaries[0], end: boundaries[1] };
-  for (let index = 1; index < boundaries.length - 1; index += 1) {
-    const gap = { start: boundaries[index], end: boundaries[index + 1] };
-    if (gap.end - gap.start > largestGap.end - largestGap.start) largestGap = gap;
-  }
-  return { edge, offset: (largestGap.start + largestGap.end) / 2 };
-};
-
 function ColorProperty({
   label,
   color,
@@ -1683,22 +1661,25 @@ function App() {
     [commit],
   );
 
-  const setTemplatePortCount = useCallback(
-    (template: ComponentTemplate, requestedCount: number) => {
+  const setTemplateDomainPortCount = useCallback(
+    (template: ComponentTemplate, domain: InterfacePort["domain"], requestedCount: number) => {
       const count = Math.max(0, Math.min(64, Math.round(requestedCount || 0)));
       let ports: InterfacePort[] = template.ports.map((port) => ({ ...port, enabled: undefined }));
-      if (count < ports.length) {
-        ports = ports.slice(0, count);
+      const domainPorts = ports.filter((port) => port.domain === domain);
+      if (count < domainPorts.length) {
+        const removedIds = new Set(domainPorts.slice(count).map((port) => port.id));
+        ports = ports.filter((port) => !removedIds.has(port.id));
       } else {
-        while (ports.length < count) {
-          const placement = nextPortPlacement(ports);
+        while (ports.filter((port) => port.domain === domain).length < count) {
+          const index = ports.filter((port) => port.domain === domain).length + 1;
+          const edge: PortEdge = domain === "power" ? "left" : "right";
           ports.push({
             id: createId("port"),
-            name: `端口 ${ports.length + 1}`,
-            domain: "signal",
-            protocol: "GPIO",
-            edge: placement.edge,
-            offset: placement.offset,
+            name: `${domain === "power" ? "电源" : "信号"} ${index}`,
+            domain,
+            protocol: domain === "signal" ? "GPIO" : undefined,
+            edge,
+            offset: 0.5,
           });
         }
       }
@@ -1707,14 +1688,9 @@ function App() {
       setEditingTemplatePortId((current) =>
         current && ports.some((port) => port.id === current) ? current : null,
       );
-      setNotice(`模板端口数量已设为 ${count}`);
+      setNotice(`${domain === "power" ? "电源" : "信号"}端口数量已设为 ${count}`);
     },
     [updateLibraryTemplate],
-  );
-
-  const addTemplatePort = useCallback(
-    (template: ComponentTemplate) => setTemplatePortCount(template, template.ports.length + 1),
-    [setTemplatePortCount],
   );
 
   const removeTemplatePort = useCallback(
@@ -2545,19 +2521,36 @@ function App() {
               </div>
               <div className="property-section">
                 <div className="property-section-title"><strong>可用端口</strong><span>{selectedTemplate.ports.length}</span></div>
-                <label className="field template-port-count">
-                  <span>端口数量</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="64"
-                    value={selectedTemplate.ports.length}
-                    onChange={(event) => setTemplatePortCount(selectedTemplate, Number(event.target.value))}
-                  />
-                </label>
-                <button className="button secondary add-port-button" onClick={() => addTemplatePort(selectedTemplate)}>
-                  <Icon name="plus" size={14} /> 添加一个端口
-                </button>
+                <div className="template-domain-counts">
+                  <label className="field power-count-field">
+                    <span>电源口数量</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="64"
+                      value={selectedTemplate.ports.filter((port) => port.domain === "power").length}
+                      onChange={(event) => setTemplateDomainPortCount(
+                        selectedTemplate,
+                        "power",
+                        Number(event.target.value),
+                      )}
+                    />
+                  </label>
+                  <label className="field signal-count-field">
+                    <span>信号口数量</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="64"
+                      value={selectedTemplate.ports.filter((port) => port.domain === "signal").length}
+                      onChange={(event) => setTemplateDomainPortCount(
+                        selectedTemplate,
+                        "signal",
+                        Number(event.target.value),
+                      )}
+                    />
+                  </label>
+                </div>
                 <div className="port-property-list">
                   {selectedTemplate.ports.map((port) => {
                     const editing = editingTemplatePortId === port.id;

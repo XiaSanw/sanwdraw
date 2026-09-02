@@ -1685,8 +1685,33 @@ button {
   gap: 7px;
 }
 
-.template-port-count {
+.template-domain-counts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
   margin-bottom: 8px;
+}
+
+.template-domain-counts .field {
+  position: relative;
+}
+
+.template-domain-counts .field::before {
+  position: absolute;
+  top: 10px;
+  right: 9px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  content: "";
+}
+
+.template-domain-counts .power-count-field::before {
+  background: #d07a28;
+}
+
+.template-domain-counts .signal-count-field::before {
+  background: var(--signal);
 }
 
 .property-color-control {
