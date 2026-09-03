@@ -5,7 +5,9 @@
   background: #f4f1e8;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
+  /* Let each WebView choose the best font rasterization for its monitor DPR.
+     Forcing grayscale antialiasing makes small text look washed out on 1×/2K displays. */
+  -webkit-font-smoothing: auto;
 
   /* ── 设计令牌：淡蓝 × 米白 ─────────────────────── */
   --ink: #26303f;

@@ -143,6 +143,7 @@ const WORLD_WIDTH = 6000;
 const WORLD_HEIGHT = 4000;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2.2;
+const DEFAULT_ZOOM = 1;
 const DEFAULT_LIBRARY_WIDTH = 238;
 const MIN_LIBRARY_WIDTH = 180;
 const MAX_LIBRARY_WIDTH = 420;
@@ -351,7 +352,7 @@ function App() {
   }));
   const document = history.present;
   const portGap = getDocumentPortGap(document);
-  const [viewport, setViewport] = useState<Viewport>({ x: 28, y: 35, zoom: 0.62 });
+  const [viewport, setViewport] = useState<Viewport>({ x: 28, y: 35, zoom: DEFAULT_ZOOM });
   const [tool, setTool] = useState<Tool>("select");
   const [selection, setSelection] = useState<Selection>(null);
   const [query, setQuery] = useState("");
@@ -375,7 +376,7 @@ function App() {
   const projectInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const portPressRef = useRef<PortPress | null>(null);
-  const initialFitDone = useRef(false);
+  const initialViewDone = useRef(false);
   const automaticRoutingPreferenceRef = useRef<AutomaticRoutingLayout>(
     createEmptyAutomaticRoutingLayout(),
   );
@@ -678,15 +679,26 @@ function App() {
     });
   }, [document.elements, portGap]);
 
+  const resetView = useCallback(() => {
+    const bounds = canvasRef.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const content = documentBounds(document.elements, portGap + 64);
+    setViewport({
+      zoom: DEFAULT_ZOOM,
+      x: Math.round(bounds.width / 2 - (content.x + content.width / 2)),
+      y: Math.round(bounds.height / 2 - (content.y + content.height / 2)),
+    });
+  }, [document.elements, portGap]);
+
   useEffect(() => {
-    if (initialFitDone.current) return;
+    if (initialViewDone.current) return;
     const frame = window.requestAnimationFrame(() => {
-      if (initialFitDone.current) return;
-      initialFitDone.current = true;
-      fitView();
+      if (initialViewDone.current) return;
+      initialViewDone.current = true;
+      resetView();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [fitView]);
+  }, [resetView]);
 
   const addTemplate = useCallback(
     (templateId: string, at?: Point) => {
@@ -806,7 +818,7 @@ function App() {
       const next = await importSanwdraw(file);
       cancelPortInteraction();
       cancelNetworkLabelInteraction();
-      initialFitDone.current = false;
+      initialViewDone.current = false;
       automaticRoutingPreferenceRef.current = createEmptyAutomaticRoutingLayout();
       setHistory({ past: [], present: next, future: [] });
       setSelection(null);
