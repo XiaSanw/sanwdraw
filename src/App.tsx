@@ -2273,13 +2273,17 @@ function App() {
             }}
           />
           <div
-            className="world"
-            style={{
-              width: WORLD_WIDTH,
-              height: WORLD_HEIGHT,
-              transform: `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.zoom})`,
-            }}
+            className="world-positioner"
+            style={{ left: viewport.x, top: viewport.y }}
           >
+            <div
+              className="world"
+              style={{
+                width: WORLD_WIDTH,
+                height: WORLD_HEIGHT,
+                zoom: viewport.zoom,
+              }}
+            >
             <svg className="wire-layer" width={WORLD_WIDTH} height={WORLD_HEIGHT}>
               {snapGuides?.x !== undefined && (
                 <line
@@ -2532,6 +2536,7 @@ function App() {
                   </div>
                 );
               })}
+            </div>
           </div>
 
           <div className="canvas-controls">

@@ -876,12 +876,15 @@ button {
   pointer-events: none;
 }
 
-.world {
+.world-positioner {
   position: absolute;
   top: 0;
   left: 0;
+}
+
+.world {
+  position: relative;
   transform-origin: 0 0;
-  will-change: transform;
 }
 
 .selection-marquee {
