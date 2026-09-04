@@ -2281,7 +2281,13 @@ function App() {
               style={{
                 width: WORLD_WIDTH,
                 height: WORLD_HEIGHT,
-                zoom: viewport.zoom,
+                // WebKit clamps very small rendered font sizes when CSS zoom is
+                // used, which lets text escape from its proportionally smaller
+                // node. Scale the complete world below 100%, then switch back to
+                // layout zoom above 100% so enlarged text stays crisp.
+                zoom: viewport.zoom >= 1 ? viewport.zoom : 1,
+                transform:
+                  viewport.zoom < 1 ? `scale(${viewport.zoom})` : undefined,
               }}
             >
             <svg className="wire-layer" width={WORLD_WIDTH} height={WORLD_HEIGHT}>
