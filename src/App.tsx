@@ -152,6 +152,17 @@ const PORT_PRESS_MOVE_TOLERANCE = 10;
 const LIBRARY_WIDTH_KEY = "sanwdraw.libraryWidth";
 const LIBRARY_COLLAPSED_KEY = "sanwdraw.libraryCollapsed";
 
+const snapToDevicePixel = (value: number) => {
+  const ratio = Math.max(1, window.devicePixelRatio || 1);
+  return Math.round(value * ratio) / ratio;
+};
+
+const alignViewportToDevicePixels = (viewport: Viewport): Viewport => ({
+  ...viewport,
+  x: snapToDevicePixel(viewport.x),
+  y: snapToDevicePixel(viewport.y),
+});
+
 const clampLibraryWidth = (value: number) =>
   Math.max(MIN_LIBRARY_WIDTH, Math.min(MAX_LIBRARY_WIDTH, Math.round(value)));
 
@@ -630,16 +641,16 @@ function App() {
           MIN_ZOOM,
           Math.min(MAX_ZOOM, current.zoom * Math.exp(-delta * 0.006)),
         );
-        return {
+        return alignViewportToDevicePixels({
           zoom,
           x: local.x - world.x * zoom,
           y: local.y - world.y * zoom,
-        };
+        });
       });
       return;
     }
 
-    setViewport((current) => ({
+    setViewport((current) => alignViewportToDevicePixels({
       ...current,
       x: current.x - event.deltaX * unit,
       y: current.y - event.deltaY * unit,
@@ -672,22 +683,11 @@ function App() {
         (bounds.height - padding * 2) / content.height,
       ),
     );
-    setViewport({
+    setViewport(alignViewportToDevicePixels({
       zoom,
       x: bounds.width / 2 - (content.x + content.width / 2) * zoom,
       y: bounds.height / 2 - (content.y + content.height / 2) * zoom,
-    });
-  }, [document.elements, portGap]);
-
-  const resetView = useCallback(() => {
-    const bounds = canvasRef.current?.getBoundingClientRect();
-    if (!bounds) return;
-    const content = documentBounds(document.elements, portGap + 64);
-    setViewport({
-      zoom: DEFAULT_ZOOM,
-      x: Math.round(bounds.width / 2 - (content.x + content.width / 2)),
-      y: Math.round(bounds.height / 2 - (content.y + content.height / 2)),
-    });
+    }));
   }, [document.elements, portGap]);
 
   useEffect(() => {
@@ -695,10 +695,10 @@ function App() {
     const frame = window.requestAnimationFrame(() => {
       if (initialViewDone.current) return;
       initialViewDone.current = true;
-      resetView();
+      fitView();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [resetView]);
+  }, [fitView]);
 
   const addTemplate = useCallback(
     (templateId: string, at?: Point) => {
@@ -1390,7 +1390,7 @@ function App() {
     }
 
     if (panDrag?.pointerId === event.pointerId) {
-      setViewport((current) => ({
+      setViewport((current) => alignViewportToDevicePixels({
         ...current,
         x: panDrag.viewportOrigin.x + event.clientX - panDrag.clientOrigin.x,
         y: panDrag.viewportOrigin.y + event.clientY - panDrag.clientOrigin.y,
@@ -2029,7 +2029,7 @@ function App() {
   });
 
   const setZoom = (zoom: number) =>
-    setViewport((current) => ({
+    setViewport((current) => alignViewportToDevicePixels({
       ...current,
       zoom: Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom)),
     }));
