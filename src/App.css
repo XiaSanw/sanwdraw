@@ -1036,6 +1036,7 @@ button {
 
 /* ── 组件节点 ───────────────────────────────────── */
 .component-node {
+  font-size: 15px;
   position: absolute;
   display: flex;
   flex-direction: column;
@@ -1091,7 +1092,7 @@ button {
 
 .node-header strong {
   color: var(--ink-strong);
-  font-size: 15px;
+  font-size: 1em;
   line-height: 1.2;
   letter-spacing: -0.02em;
 }
@@ -1099,7 +1100,7 @@ button {
 .node-header small {
   margin-top: 5px;
   color: #7e8694;
-  font-size: 9px;
+  font-size: 0.7333em;
   line-height: 1.45;
 }
 
@@ -1117,7 +1118,7 @@ button {
   background: #f7f5ec;
   color: #6a7180;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 7px;
+  font-size: 0.6em;
   font-weight: 650;
 }
 
@@ -1129,7 +1130,7 @@ button {
   padding: 8px 18px 10px;
   border-top: 1px solid #f0ede0;
   color: var(--faint);
-  font-size: 8px;
+  font-size: 0.6em;
 }
 
 /* ── 端口 ───────────────────────────────────────── */
@@ -1148,7 +1149,7 @@ button {
   border: 1px solid;
   border-radius: 7px;
   background: #fff;
-  font-size: 7px;
+  font-size: 0.6em;
   font-weight: 750;
   white-space: nowrap;
   cursor: move;
